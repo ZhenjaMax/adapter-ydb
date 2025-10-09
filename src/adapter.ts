@@ -26,8 +26,13 @@ export class PrismaYdbAdapter extends YdbQueryable implements SqlDriverAdapter {
    * Возвращает базовую информацию о подключении, которую запрашивает Prisma.
    */
   getConnectionInfo(): ConnectionInfo {
+    const databasePath = this.ydbClient.getDatabasePath().trim()
+    const normalizedPath = databasePath.replace(/\/+/g, '/').replace(/\/+$/, '')
+    const pathSegments = normalizedPath.split('/').filter(Boolean)
+    const schemaName = pathSegments.length > 0 ? pathSegments[pathSegments.length - 1] : 'root'
+
     return {
-      schemaName: 'public', // логическое пространство схемы, Prisma требует это поле
+      schemaName,
       supportsRelationJoins: true // Prisma может использовать JOIN между таблицами
     }
   }

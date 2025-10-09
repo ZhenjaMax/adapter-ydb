@@ -71,6 +71,10 @@ export class YdbClientWrapper {
     this.txSet.clear()
   }
 
+  getDatabasePath(): string {
+    return this.config.database
+  }
+
   private handleCreateTable(sql: string): YdbResultSet & { rowsAffected?: number } {
     const table = this.expectMatchGroup(
       /CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+(\w+)/i.exec(sql),

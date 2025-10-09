@@ -1,6 +1,4 @@
-playground
-ydb_certs
-ydb_data
+playground/ydb_*
 
 # Logs
 logs
