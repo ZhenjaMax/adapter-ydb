@@ -1,0 +1,20 @@
+{
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "dependencies": {
+    "@prisma/adapter-mariadb": "^6.16.3",
+    "@prisma/adapter-mssql": "^6.16.3",
+    "@prisma/driver-adapter-utils": "^6.16.3"
+  },
+  "devDependencies": {
+    "@prisma/client": "^6.17.0",
+    "prisma": "^6.17.0"
+  }
+}
