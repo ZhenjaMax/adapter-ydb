@@ -7,7 +7,7 @@ export class YdbTransaction extends YdbQueryable implements PrismaTransaction {
 
   constructor(protected txId: string, client: YdbClientWrapper, options?: Partial<TransactionOptions>) {
     super(client, txId)
-    this.options = { usePhantomQuery: false, ...options }
+    this.options = { usePhantomQuery: true, ...options }
   }
 
   async commit(): Promise<void> {

@@ -11,7 +11,12 @@
   "dependencies": {
     "@prisma/adapter-mariadb": "^6.16.3",
     "@prisma/adapter-mssql": "^6.16.3",
-    "@prisma/driver-adapter-utils": "^6.16.3"
+    "@prisma/driver-adapter-utils": "^6.16.3",
+    "@ydbjs/core": "^6.0.0",
+    "@ydbjs/query": "^6.0.0",
+    "@ydbjs/api": "^6.0.0",
+    "@ydbjs/error": "^6.0.0",
+    "@ydbjs/value": "^6.0.0"
   },
   "devDependencies": {
     "@prisma/client": "^6.17.0",

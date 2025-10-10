@@ -1,7 +1,9 @@
 import type { ConnectionInfo, IsolationLevel, SqlDriverAdapter, Transaction } from '@prisma/driver-adapter-utils'
+import { DriverAdapterError } from '@prisma/driver-adapter-utils'
 import { YdbClientWrapper } from './client-wrapper'
 import { YdbQueryable } from './queryable'
 import { YdbTransaction } from './transaction'
+import type { YdbTransactionIsolation } from './types'
 
 /**
  * PrismaYdbAdapter — основной адаптер между Prisma и YDB.
@@ -17,9 +19,10 @@ export class PrismaYdbAdapter extends YdbQueryable implements SqlDriverAdapter {
    * Запускает новую транзакцию в YDB.
    * Возвращает объект YdbTransaction, совместимый с Prisma Transaction API.
    */
-  async startTransaction(_isolationLevel?: IsolationLevel): Promise<Transaction> {
-    const txId = await this.ydbClient.beginTransaction()
-    return new YdbTransaction(txId, this.ydbClient)
+  async startTransaction(isolationLevel?: IsolationLevel): Promise<Transaction> {
+    const isolation = this.mapIsolationLevel(isolationLevel)
+    const meta = await this.ydbClient.beginTransaction(isolation)
+    return new YdbTransaction(meta.txId, this.ydbClient, { usePhantomQuery: true })
   }
 
   /**
@@ -50,13 +53,21 @@ export class PrismaYdbAdapter extends YdbQueryable implements SqlDriverAdapter {
    * Выполняет многооператорный скрипт, разделённый ';' (грубая реализация для mock-клиента).
    */
   async executeScript(script: string): Promise<void> {
-    const statements = script
-      .split(';')
-      .map((s) => s.trim())
-      .filter(Boolean)
+    await this.ydbClient.executeScript(script)
+  }
 
-    for (const stmt of statements) {
-      await this.ydbClient.executeQuery(stmt)
+  private mapIsolationLevel(level?: IsolationLevel): YdbTransactionIsolation {
+    if (!level) {
+      return 'serializableReadWrite'
+    }
+
+    switch (level) {
+      case 'SERIALIZABLE':
+        return 'serializableReadWrite'
+      case 'SNAPSHOT':
+        return 'snapshotReadOnly'
+      default:
+        throw new DriverAdapterError({ kind: 'InvalidIsolationLevel', level })
     }
   }
 }

@@ -6,7 +6,6 @@ async function main() {
   const factory = new PrismaYdbAdapterFactory({
     endpoint: 'grpc://localhost:2136', // порт YDB из Docker
     database: '/local',                 // путь к базе (обычно /local)
-    authToken: undefined                // если требуется — токен аутентификации
   })
 
   // 2️⃣ Инициализируем адаптер
@@ -43,7 +42,7 @@ async function main() {
     console.log('👥 Users:', users)
 
     // 7️⃣ Пример транзакции
-    await prisma.$transaction(async (tx) => {
+    await prisma.$transaction(async (tx: PrismaClient) => {
       await tx.$executeRawUnsafe(`UPSERT INTO users (id, name, age) VALUES (2, "Bob", 25);`)
       const count = await tx.$queryRawUnsafe(`SELECT COUNT(*) as cnt FROM users;`)
       console.log('📊 Users count inside transaction:', count)

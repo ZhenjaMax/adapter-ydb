@@ -1,227 +1,600 @@
-import type { YdbConnectionConfig, YdbResultSet } from './types'
+import type { SqlQuery, ArgType, ColumnType } from '@prisma/driver-adapter-utils'
+import { Driver } from '@ydbjs/core'
+import { QueryServiceDefinition, ExecMode, Syntax, StatsMode } from '@ydbjs/api/dist/query.js'
+import { StatusIds_StatusCode } from '@ydbjs/api/dist/operation.js'
+import { YDBError } from '@ydbjs/error'
+import { fromYdb, toJs } from '@ydbjs/value/dist/index.js'
+import type { Type as YdbValueType } from '@ydbjs/value/dist/type.js'
+import type { Value as YdbValue } from '@ydbjs/value/dist/value.js'
+import type { Value as YdbProtoValue, TypedValue } from '@ydbjs/api/dist/gen/protos/ydb_value_pb.js'
+import type { TransactionControl } from '@ydbjs/api/dist/gen/protos/ydb_query_pb.js'
+import { Optional } from '@ydbjs/value/dist/optional.js'
+import { List, ListType } from '@ydbjs/value/dist/list.js'
+import {
+  Bool,
+  BoolType,
+  Int32,
+  Int32Type,
+  Int64,
+  Int64Type,
+  Float,
+  FloatType,
+  Double,
+  DoubleType,
+  Utf8,
+  Utf8Type,
+  Bytes,
+  BytesType,
+  JsonDocument,
+  JsonDocumentType,
+  Timestamp,
+  TimestampType,
+  Uuid,
+  UuidType,
+} from '@ydbjs/value/dist/primitive.js'
+
 import { YqlTypeMapper } from './yql-conversion'
+import type {
+  YdbColumn,
+  YdbConnectionConfig,
+  YdbQueryResult,
+  YdbTransactionIsolation,
+  YdbTransactionMeta,
+} from './types'
 
-/**
- * YdbClientWrapper — тонкая прослойка между адаптером и транспортом YDB.
- *
- * В этом репозитории реализована минимальная in-memory имитация поведения YDB,
- * достаточная для локальной отладки и playground. При интеграции с реальным YDB
- * замените содержимое executeQuery/beginTransaction/... на вызовы SDK.
- */
+type SessionContext = {
+  sessionId: string
+  nodeId: bigint
+}
+
+type TransactionContext = YdbTransactionMeta & {
+  attached: boolean
+}
+
+type PreparedQuery = {
+  text: string
+  parameters: Record<string, YdbValue>
+}
+
+type ScalarMeta = {
+  typeFactory(): YdbValueType
+  create(value: unknown): YdbValue
+}
+
+class StaticListValue implements YdbValue {
+  readonly type: ListType
+
+  constructor(itemType: YdbValueType) {
+    this.type = new ListType(itemType)
+  }
+
+  encode() {
+    return { items: [] } as unknown as YdbProtoValue
+  }
+}
+
 export class YdbClientWrapper {
+  private driver: Driver | null = null
   private connected = false
+  private readonly transactions = new Map<string, TransactionContext>()
 
-  private tables = new Map<
-    string,
-    { columns: { name: string; type: string }[]; primaryKey?: string }
-  >()
-  private data = new Map<string, Map<string | number, Record<string, any>>>()
-  private txSet = new Set<string>()
-
-  constructor(private config: YdbConnectionConfig) {}
+  constructor(private readonly config: YdbConnectionConfig) {}
 
   async connect(): Promise<void> {
+    if (this.connected) return
+
+    const connectionString = this.buildConnectionString()
+    this.driver = new Driver(connectionString)
+    await this.driver.ready()
     this.connected = true
   }
 
-  async executeQuery(
-    sql: string,
-    params?: Record<string, any>,
-    txId?: string,
-  ): Promise<YdbResultSet & { rowsAffected?: number }> {
-    if (!this.connected) throw new Error('YDB client is not connected')
+  async executeQuery(query: SqlQuery, txId?: string): Promise<YdbQueryResult> {
+    const driver = this.ensureDriver()
 
-    const normParams: Record<string, any> | undefined = params
-      ? Object.fromEntries(
-          Object.entries(params).map(([k, v]) => [k, YqlTypeMapper.toYdbParameter(v)]),
-        )
-      : undefined
+    const prepared = this.prepareQuery(query)
+    const encodedParams = this.encodeParameters(prepared.parameters)
 
-    const text = sql.trim()
-    const upper = text.toUpperCase()
+    const session = txId ? this.requireTransaction(txId) : await this.createSession()
+    const client = driver.createClient(QueryServiceDefinition, session.nodeId)
 
-    if (upper.startsWith('CREATE TABLE')) return this.handleCreateTable(text)
-    if (upper.startsWith('UPSERT INTO')) return this.handleUpsert(text)
-    if (/^SELECT\s+COUNT\(\*\)\s+AS\s+\w+\s+FROM\s+\w+/i.test(text)) return this.handleSelectCount(text)
-    if (/^SELECT\s+\*\s+FROM\s+\w+/i.test(text)) return this.handleSelectAll(text)
+    const request: Record<string, unknown> = {
+      sessionId: session.sessionId,
+      execMode: ExecMode.EXECUTE,
+      query: {
+        case: 'queryContent',
+        value: {
+          syntax: Syntax.YQL_V1,
+          text: prepared.text,
+        },
+      },
+      parameters: encodedParams,
+      statsMode: StatsMode.NONE,
+    }
 
-    throw new Error('Unsupported YQL in mock YdbClientWrapper: ' + sql)
+    if (txId) {
+      const txControl = {
+        txSelector: {
+          case: 'txId',
+          value: txId,
+        },
+      } as unknown as TransactionControl
+      request.txControl = txControl
+    }
+
+    const stream = client.executeQuery(request)
+
+    const columns: YdbColumn[] = []
+    const columnTypes: ColumnType[] = []
+    const rows: unknown[][] = []
+
+    try {
+      for await (const part of stream) {
+        if (part.status !== StatusIds_StatusCode.SUCCESS) {
+          throw new YDBError(part.status, part.issues)
+        }
+
+        if (!part.resultSet) {
+          continue
+        }
+
+        if (columns.length === 0) {
+          for (const column of part.resultSet.columns) {
+            if (!column.type) {
+              throw new Error(`YDB returned column without type metadata: ${column.name}`)
+            }
+            const columnMeta: YdbColumn = {
+              name: column.name,
+              type: column.type,
+            }
+            columns.push(columnMeta)
+            columnTypes.push(YqlTypeMapper.toPrismaColumnType(column.type))
+          }
+        }
+
+        const columnSchemas = part.resultSet.columns
+
+        for (const row of part.resultSet.rows) {
+          const normalizedRow: unknown[] = []
+
+          row.items.forEach((value: unknown, index: number) => {
+            const columnSchema = columnSchemas[index]
+            if (!columnSchema) {
+              throw new Error(`Missing column metadata for index ${index}`)
+            }
+            const ydbType = columnSchema.type
+            if (!ydbType) {
+              throw new Error(`Missing type for column index ${index}`)
+            }
+
+            const ydbValue = fromYdb(value as any, ydbType)
+            const columnType = columnTypes[index] ?? YqlTypeMapper.toPrismaColumnType(ydbType)
+            const jsValue = toJs(ydbValue)
+            normalizedRow.push(YqlTypeMapper.normalizeValue(jsValue, columnType))
+          })
+
+          rows.push(normalizedRow)
+        }
+      }
+    } finally {
+      if (!txId) {
+        await this.deleteSession(session)
+      }
+    }
+
+    return {
+      columns,
+      columnTypes,
+      rows,
+      rowsAffected: 0,
+    }
   }
 
-  async beginTransaction(): Promise<string> {
-    const id = 'tx_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2)
-    this.txSet.add(id)
-    return id
+  async executeScript(script: string): Promise<void> {
+    const driver = this.ensureDriver()
+    const session = await this.createSession()
+    const client = driver.createClient(QueryServiceDefinition, session.nodeId)
+
+    try {
+      const stream = client.executeQuery({
+        sessionId: session.sessionId,
+        execMode: ExecMode.EXECUTE,
+        query: {
+          case: 'queryContent',
+          value: {
+            syntax: Syntax.YQL_V1,
+            text: script,
+          },
+        },
+        statsMode: StatsMode.NONE,
+      })
+
+      for await (const part of stream) {
+        if (part.status !== StatusIds_StatusCode.SUCCESS) {
+          throw new YDBError(part.status, part.issues)
+        }
+      }
+    } finally {
+      await this.deleteSession(session)
+    }
+  }
+
+  async beginTransaction(isolation: YdbTransactionIsolation): Promise<YdbTransactionMeta> {
+    const driver = this.ensureDriver()
+    const session = await this.createSession()
+    const client = driver.createClient(QueryServiceDefinition, session.nodeId)
+
+    const beginResult = await client.beginTransaction({
+      sessionId: session.sessionId,
+      txSettings: { txMode: { case: isolation, value: {} } },
+    })
+
+    if (beginResult.status !== StatusIds_StatusCode.SUCCESS || !beginResult.txMeta?.id) {
+      await this.deleteSession(session)
+      throw new YDBError(beginResult.status, beginResult.issues)
+    }
+
+    const txMeta: TransactionContext = {
+      txId: beginResult.txMeta.id,
+      sessionId: session.sessionId,
+      nodeId: session.nodeId,
+      isolation,
+      attached: true,
+    }
+
+    this.transactions.set(txMeta.txId, txMeta)
+    return txMeta
   }
 
   async commitTransaction(txId: string): Promise<void> {
-    if (!this.txSet.has(txId)) throw new Error('Unknown transaction id: ' + txId)
-    this.txSet.delete(txId)
+    const tx = this.requireTransaction(txId)
+    const driver = this.ensureDriver()
+    const client = driver.createClient(QueryServiceDefinition, tx.nodeId)
+
+    const result = await client.commitTransaction({
+      sessionId: tx.sessionId,
+      txId: tx.txId,
+    })
+
+    if (result.status !== StatusIds_StatusCode.SUCCESS) {
+      throw new YDBError(result.status, result.issues)
+    }
+
+    await this.deleteSession({ sessionId: tx.sessionId, nodeId: tx.nodeId })
+    this.transactions.delete(txId)
   }
 
   async rollbackTransaction(txId: string): Promise<void> {
-    if (!this.txSet.has(txId)) throw new Error('Unknown transaction id: ' + txId)
-    this.txSet.delete(txId)
-  }
+    const tx = this.requireTransaction(txId)
+    const driver = this.ensureDriver()
+    const client = driver.createClient(QueryServiceDefinition, tx.nodeId)
 
-  async close(): Promise<void> {
-    this.connected = false
-    this.tables.clear()
-    this.data.clear()
-    this.txSet.clear()
+    await client.rollbackTransaction({
+      sessionId: tx.sessionId,
+      txId: tx.txId,
+    })
+
+    await this.deleteSession({ sessionId: tx.sessionId, nodeId: tx.nodeId })
+    this.transactions.delete(txId)
   }
 
   getDatabasePath(): string {
+    const driver = this.driver
+    if (driver) {
+      return driver.database
+    }
     return this.config.database
   }
 
-  private handleCreateTable(sql: string): YdbResultSet & { rowsAffected?: number } {
-    const table = this.expectMatchGroup(
-      /CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+(\w+)/i.exec(sql),
-      1,
-      'Invalid CREATE TABLE statement',
-    )
-
-    const parenStart = sql.indexOf('(')
-    const parenEnd = sql.lastIndexOf(')')
-    if (parenStart === -1 || parenEnd === -1 || parenEnd <= parenStart) {
-      throw new Error('Invalid column definition in CREATE TABLE')
+  async close(): Promise<void> {
+    this.transactions.clear()
+    if (this.driver) {
+      this.driver.close()
     }
-    const inside = sql.slice(parenStart + 1, parenEnd)
+    this.driver = null
+    this.connected = false
+  }
 
-    let primaryKey: string | undefined
-    const pkMatch = /PRIMARY\s+KEY\s*\(([^)]+)\)/i.exec(inside)
-    if (pkMatch) {
-      const pkGroup = this.expectMatchGroup(pkMatch, 1, 'Invalid PRIMARY KEY definition')
-      // Проверяем, что pkGroup не undefined перед вызовом split()
-      if (pkGroup !== undefined) {
-        // @ts-ignore
-        primaryKey = pkGroup!.split(',')[0].trim().replace(/"/g, '');
+  private buildConnectionString(): string {
+    const { endpoint, database } = this.config
+    const normalizedDatabase = database.startsWith('/') ? database : `/${database}`
+    return `${endpoint}${normalizedDatabase}`
+  }
+
+  private ensureDriver(): Driver {
+    const driver = this.driver
+    if (!driver || !this.connected) {
+      throw new Error('YDB client is not connected. Call connect() first.')
+    }
+    return driver
+  }
+
+  private requireTransaction(txId: string): TransactionContext {
+    const tx = this.transactions.get(txId)
+    if (!tx) {
+      throw new Error(`Transaction ${txId} was not found or already finished.`)
+    }
+    return tx
+  }
+
+  private async createSession(): Promise<SessionContext> {
+    const driver = this.ensureDriver()
+    const client = driver.createClient(QueryServiceDefinition)
+
+    const sessionResponse = await client.createSession({})
+    if (sessionResponse.status !== StatusIds_StatusCode.SUCCESS) {
+      throw new YDBError(sessionResponse.status, sessionResponse.issues)
+    }
+
+    const sessionId = sessionResponse.sessionId
+    const nodeId = sessionResponse.nodeId
+
+    const attachClient = driver.createClient(QueryServiceDefinition, nodeId)
+    const iterator = attachClient.attachSession({ sessionId }, {})[Symbol.asyncIterator]()
+    const attachResult = await iterator.next()
+    if (attachResult.value.status !== StatusIds_StatusCode.SUCCESS) {
+      throw new YDBError(attachResult.value.status, attachResult.value.issues)
+    }
+
+    return { sessionId, nodeId }
+  }
+
+  private async deleteSession(session: SessionContext): Promise<void> {
+    try {
+      const driver = this.ensureDriver()
+      const client = driver.createClient(QueryServiceDefinition, session.nodeId)
+      await client.deleteSession({ sessionId: session.sessionId })
+    } catch (error) {
+      // Ignore errors related to already closed sessions
+    }
+  }
+
+  private prepareQuery(query: SqlQuery): PreparedQuery {
+    if (!query.args.length) {
+      return { text: query.sql, parameters: {} }
+    }
+
+    const segmentsInfo = this.extractSegments(query)
+    const metas = query.argTypes?.map((arg) => this.getScalarMeta(arg)) ?? []
+
+    const values: YdbValue[] = segmentsInfo.order.map((argIndex) => {
+      const argValue = query.args[argIndex]
+      const argType = query.argTypes?.[argIndex]
+      const meta = metas[argIndex] ?? this.getScalarMeta(argType)
+
+      if (argType?.arity === 'list') {
+        return this.createListValue(argValue, meta)
       }
-    }
 
-    const colsPart = inside.replace(/,?\s*PRIMARY\s+KEY\s*\([^)]+\)/i, '')
-    const colDefs = colsPart.split(',').map((s) => s.trim()).filter(Boolean)
-
-    const columns = colDefs.map((def) => {
-      const match = /^(\w+)\s+(\w+)/.exec(def)
-      const name = this.expectMatchGroup(match, 1, 'Invalid column definition: ' + def)
-      const type = this.expectMatchGroup(match, 2, 'Invalid column definition: ' + def)
-      return { name, type }
+      return this.createScalarValue(argValue, meta)
     })
 
-    const meta: { columns: { name: string; type: string }[]; primaryKey?: string } = {
-      columns,
-    }
-    if (primaryKey !== undefined) meta.primaryKey = primaryKey
-    this.tables.set(table, meta)
-    if (!this.data.has(table)) this.data.set(table, new Map())
+    const textParts = segmentsInfo.segments
+    let text = ''
+    const params: Record<string, YdbValue> = {}
 
-    return { columns: [], rows: [], rowsAffected: 0 }
-  }
-
-  private handleUpsert(sql: string): YdbResultSet & { rowsAffected?: number } {
-    const match = /^UPSERT\s+INTO\s+(\w+)\s*\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)/i.exec(sql)
-    const table = this.expectMatchGroup(match, 1, 'Invalid UPSERT statement')
-    const columnsGroup = this.expectMatchGroup(match, 2, 'Invalid UPSERT statement')
-    const valuesGroup = this.expectMatchGroup(match, 3, 'Invalid UPSERT statement')
-    const cols = columnsGroup.split(',').map((s) => s.trim().replace(/"/g, ''))
-    const rawValues = this.splitCsvRespectingQuotes(valuesGroup)
-    const values = rawValues.map((v) => this.parseLiteral(v))
-
-    const schema = this.expectMapValue(this.tables, table, `Table not found: ${table}`)
-
-    const rowObj: Record<string, any> = {}
-    cols.forEach((c, i) => (rowObj[c] = values[i]))
-
-    const store = this.expectMapValue(
-      this.data,
-      table,
-      `Table storage is not initialized: ${table}`,
-    )
-    const pk = schema.primaryKey ?? this.expectArrayValue(cols, 0, 'UPSERT requires at least one column')
-    const pkVal = rowObj[pk]
-    if (pkVal === undefined) throw new Error('Primary key value is required for UPSERT')
-    store.set(pkVal, rowObj)
-
-    return { columns: [], rows: [], rowsAffected: 1 }
-  }
-
-  private handleSelectAll(sql: string): YdbResultSet & { rowsAffected?: number } {
-    const match = /^SELECT\s+\*\s+FROM\s+(\w+)/i.exec(sql)
-    const table = this.expectMatchGroup(match, 1, 'Invalid SELECT statement')
-
-    const schema = this.expectMapValue(this.tables, table, `Table not found: ${table}`)
-    const store = this.expectMapValue(this.data, table, `Table storage is not initialized: ${table}`)
-
-    const columns = schema.columns
-    const rows = Array.from(store.values()).map((obj) => columns.map((c) => obj[c.name]))
-
-    return { columns, rows }
-  }
-
-  private handleSelectCount(sql: string): YdbResultSet & { rowsAffected?: number } {
-    const match = /^SELECT\s+COUNT\(\*\)\s+AS\s+(\w+)\s+FROM\s+(\w+)/i.exec(sql)
-    const alias = this.expectMatchGroup(match, 1, 'Invalid SELECT COUNT statement')
-    const table = this.expectMatchGroup(match, 2, 'Invalid SELECT COUNT statement')
-
-    const schema = this.expectMapValue(this.tables, table, `Table not found: ${table}`)
-    const store = this.expectMapValue(this.data, table, `Table storage is not initialized: ${table}`)
-
-    const columns = [{ name: alias, type: 'Int64' }]
-    const rows = [[store.size]]
-    return { columns, rows }
-  }
-
-  private splitCsvRespectingQuotes(s: string): string[] {
-    const out: string[] = []
-    let cur = ''
-    let inQuotes = false
-    for (let i = 0; i < s.length; i++) {
-      const ch = s[i]
-      if (ch === '"') {
-        inQuotes = !inQuotes
-        continue
+    textParts.forEach((part, index) => {
+      text += part
+      if (index < values.length) {
+        const paramName = `$p${index}`
+        const paramValue = values[index]!
+        params[paramName] = paramValue
+        text += paramName
       }
-      if (ch === ',' && !inQuotes) {
-        out.push(cur.trim())
-        cur = ''
-      } else {
-        cur += ch
+    })
+
+    return { text, parameters: params }
+  }
+
+  private encodeParameters(parameters: Record<string, YdbValue>) {
+    const encoded: Record<string, TypedValue> = {}
+
+    for (const [name, value] of Object.entries(parameters)) {
+      encoded[name] = {
+        type: value.type.encode(),
+        value: value.encode(),
+      } as unknown as TypedValue
+    }
+
+    return encoded
+  }
+
+  private extractSegments(query: SqlQuery): { segments: string[]; order: number[] } {
+    const segments: string[] = []
+    const order: number[] = []
+    const dollarRegex = /\$(\d+)/g
+    const questionRegex = /\?/g
+
+    let lastIndex = 0
+    let match: RegExpExecArray | null = null
+
+    if (dollarRegex.test(query.sql)) {
+      dollarRegex.lastIndex = 0
+      while ((match = dollarRegex.exec(query.sql))) {
+        const index = Number(match[1]) - 1
+        if (index < 0 || index >= query.args.length) {
+          throw new Error(`Placeholder $${match[1]} does not match any argument.`)
+        }
+
+        segments.push(query.sql.slice(lastIndex, match.index))
+        order.push(index)
+        lastIndex = match.index + match[0].length
+      }
+    } else if (questionRegex.test(query.sql)) {
+      questionRegex.lastIndex = 0
+      let sequentialIndex = 0
+
+      while ((match = questionRegex.exec(query.sql))) {
+        if (sequentialIndex >= query.args.length) {
+          throw new Error('Too many placeholders compared to provided arguments.')
+        }
+
+        segments.push(query.sql.slice(lastIndex, match.index))
+        order.push(sequentialIndex)
+        lastIndex = match.index + match[0].length
+        sequentialIndex += 1
       }
     }
-    if (cur.length) out.push(cur.trim())
-    return out
+
+    segments.push(query.sql.slice(lastIndex))
+
+    if (order.length === 0) {
+      return { segments: [query.sql], order: [] }
+    }
+
+    return { segments, order }
   }
 
-  private parseLiteral(v: string): any {
-    const t = v.trim()
-    if (/^".*"$/.test(t)) return t.slice(1, -1)
-    if (/^-?\d+$/.test(t)) return Number(t)
-    if (/^-?\d+\.\d+$/.test(t)) return Number(t)
-    if (/^NULL$/i.test(t)) return null
-    return t
+  private getScalarMeta(argType?: ArgType): ScalarMeta {
+    const scalar = argType?.scalarType ?? 'string'
+
+    switch (scalar) {
+      case 'boolean':
+        return {
+          typeFactory: () => new BoolType(),
+          create: (value) => new Bool(Boolean(value)),
+        }
+      case 'int':
+        return {
+          typeFactory: () => new Int32Type(),
+          create: (value) => new Int32(this.ensureNumber(value)),
+        }
+      case 'bigint':
+        return {
+          typeFactory: () => new Int64Type(),
+          create: (value) => new Int64(this.ensureBigInt(value)),
+        }
+      case 'float':
+        return {
+          typeFactory: () => new FloatType(),
+          create: (value) => new Float(this.ensureNumber(value)),
+        }
+      case 'decimal':
+        return {
+          typeFactory: () => new DoubleType(),
+          create: (value) => new Double(this.ensureNumber(value)),
+        }
+      case 'uuid':
+        return {
+          typeFactory: () => new UuidType(),
+          create: (value) => new Uuid(String(value)),
+        }
+      case 'json':
+        return {
+          typeFactory: () => new JsonDocumentType(),
+          create: (value) => new JsonDocument(typeof value === 'string' ? value : JSON.stringify(value)),
+        }
+      case 'datetime':
+        return {
+          typeFactory: () => new TimestampType(),
+          create: (value) => new Timestamp(this.ensureDate(value)),
+        }
+      case 'bytes':
+        return {
+          typeFactory: () => new BytesType(),
+          create: (value) => new Bytes(this.ensureUint8Array(value)),
+        }
+      case 'enum':
+      case 'string':
+        return {
+          typeFactory: () => new Utf8Type(),
+          create: (value) => new Utf8(String(value)),
+        }
+      case 'unknown':
+        return {
+          typeFactory: () => new Utf8Type(),
+          create: (value) => new Utf8(String(value)),
+        }
+      default:
+        return {
+          typeFactory: () => new Utf8Type(),
+          create: (value) => new Utf8(String(value)),
+        }
+    }
   }
 
-  private expectMatchGroup(
-    match: RegExpExecArray | null,
-    index: number,
-    errorMessage: string,
-  ): string {
-    const group = match?.[index]
-    if (!group) throw new Error(errorMessage)
-    return group
+  private createScalarValue(value: unknown, meta: ScalarMeta): YdbValue {
+    if (value === null || value === undefined) {
+      return new Optional(null, meta.typeFactory())
+    }
+
+    const created = meta.create(value)
+    if (created instanceof Optional) {
+      return created
+    }
+    return created
   }
 
-  private expectArrayValue<T>(values: T[], index: number, errorMessage: string): T {
-    const value = values[index]
-    if (value === undefined) throw new Error(errorMessage)
-    return value
+  private createListValue(value: unknown, meta: ScalarMeta): YdbValue {
+    const source = Array.isArray(value) ? value : []
+
+    if (source.length === 0) {
+      return new StaticListValue(meta.typeFactory())
+    }
+
+    const items = source.map((item) => this.createScalarValue(item, meta))
+    return new List(...items)
   }
 
-  private expectMapValue<T>(map: Map<string, T>, key: string, errorMessage: string): T {
-    const value = map.get(key)
-    if (value === undefined) throw new Error(errorMessage)
-    return value
+  private ensureDate(value: unknown): Date {
+    if (value instanceof Date) {
+      return value
+    }
+    if (typeof value === 'number') {
+      return new Date(value)
+    }
+    if (typeof value === 'string') {
+      return new Date(value)
+    }
+    throw new Error('Unsupported date value for YDB parameter.')
+  }
+
+  private ensureUint8Array(value: unknown): Uint8Array {
+    if (value instanceof Uint8Array) {
+      return value
+    }
+    if (typeof Buffer !== 'undefined' && Buffer.isBuffer(value)) {
+      return new Uint8Array(value)
+    }
+    if (Array.isArray(value)) {
+      return new Uint8Array(value)
+    }
+    if (value instanceof ArrayBuffer) {
+      return new Uint8Array(value)
+    }
+    if (ArrayBuffer.isView(value)) {
+      const view = value as ArrayBufferView
+      return new Uint8Array(view.buffer, view.byteOffset, view.byteLength)
+    }
+    throw new Error('Unsupported binary parameter type for YDB.')
+  }
+
+  private ensureNumber(value: unknown): number {
+    if (typeof value === 'number') {
+      return value
+    }
+    if (typeof value === 'string') {
+      const parsed = Number(value)
+      if (!Number.isNaN(parsed)) {
+        return parsed
+      }
+    }
+    if (typeof value === 'bigint') {
+      return Number(value)
+    }
+    throw new Error('Cannot coerce value to number for YDB parameter binding.')
+  }
+
+  private ensureBigInt(value: unknown): bigint {
+    if (typeof value === 'bigint') {
+      return value
+    }
+    if (typeof value === 'number') {
+      return BigInt(Math.trunc(value))
+    }
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return BigInt(value)
+    }
+    throw new Error('Cannot coerce value to bigint for YDB parameter binding.')
   }
 }

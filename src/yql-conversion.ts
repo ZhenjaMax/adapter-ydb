@@ -1,113 +1,168 @@
-import { ColumnTypeEnum } from '@prisma/driver-adapter-utils'
+import type * as Ydb from '@ydbjs/api/dist/value.js'
+import { Type_PrimitiveTypeId } from '@ydbjs/api/dist/value.js'
+import { ColumnTypeEnum, type ColumnType } from '@prisma/driver-adapter-utils'
 
-/**
- * YqlTypeMapper — преобразование типов YQL ↔ Prisma ↔ JS
- */
+type PrimitiveTypeId = Type_PrimitiveTypeId
+
+const ARRAY_TYPE_MAP = new Map<ColumnType, ColumnType>([
+  [ColumnTypeEnum.Int32, ColumnTypeEnum.Int32Array],
+  [ColumnTypeEnum.Int64, ColumnTypeEnum.Int64Array],
+  [ColumnTypeEnum.Float, ColumnTypeEnum.FloatArray],
+  [ColumnTypeEnum.Double, ColumnTypeEnum.DoubleArray],
+  [ColumnTypeEnum.Numeric, ColumnTypeEnum.NumericArray],
+  [ColumnTypeEnum.Boolean, ColumnTypeEnum.BooleanArray],
+  [ColumnTypeEnum.Character, ColumnTypeEnum.CharacterArray],
+  [ColumnTypeEnum.Text, ColumnTypeEnum.TextArray],
+  [ColumnTypeEnum.Date, ColumnTypeEnum.DateArray],
+  [ColumnTypeEnum.Time, ColumnTypeEnum.TimeArray],
+  [ColumnTypeEnum.DateTime, ColumnTypeEnum.DateTimeArray],
+  [ColumnTypeEnum.Json, ColumnTypeEnum.JsonArray],
+  [ColumnTypeEnum.Bytes, ColumnTypeEnum.BytesArray],
+  [ColumnTypeEnum.Uuid, ColumnTypeEnum.UuidArray],
+])
+
+function unwrapOptional(type: Ydb.Type): Ydb.Type {
+  let current = type
+  while (current.type?.case === 'optionalType') {
+    current = current.type.value.item as Ydb.Type
+  }
+  return current
+}
+
+function mapPrimitive(typeId: PrimitiveTypeId): ColumnType {
+  switch (typeId) {
+    case Type_PrimitiveTypeId.BOOL:
+      return ColumnTypeEnum.Boolean
+    case Type_PrimitiveTypeId.INT8:
+    case Type_PrimitiveTypeId.INT16:
+    case Type_PrimitiveTypeId.INT32:
+    case Type_PrimitiveTypeId.UINT8:
+    case Type_PrimitiveTypeId.UINT16:
+    case Type_PrimitiveTypeId.UINT32:
+      return ColumnTypeEnum.Int32
+    case Type_PrimitiveTypeId.INT64:
+    case Type_PrimitiveTypeId.UINT64:
+      return ColumnTypeEnum.Int64
+    case Type_PrimitiveTypeId.FLOAT:
+      return ColumnTypeEnum.Float
+    case Type_PrimitiveTypeId.DOUBLE:
+      return ColumnTypeEnum.Double
+    case Type_PrimitiveTypeId.DATE:
+      return ColumnTypeEnum.Date
+    case Type_PrimitiveTypeId.DATETIME:
+    case Type_PrimitiveTypeId.TIMESTAMP:
+    case Type_PrimitiveTypeId.TZ_DATETIME:
+    case Type_PrimitiveTypeId.TZ_TIMESTAMP:
+      return ColumnTypeEnum.DateTime
+    case Type_PrimitiveTypeId.STRING:
+    case Type_PrimitiveTypeId.YSON:
+      return ColumnTypeEnum.Bytes
+    case Type_PrimitiveTypeId.UTF8:
+      return ColumnTypeEnum.Text
+    case Type_PrimitiveTypeId.JSON:
+    case Type_PrimitiveTypeId.JSON_DOCUMENT:
+      return ColumnTypeEnum.Json
+    case Type_PrimitiveTypeId.UUID:
+      return ColumnTypeEnum.Uuid
+    case Type_PrimitiveTypeId.DYNUMBER:
+      return ColumnTypeEnum.Numeric
+    default:
+      return ColumnTypeEnum.Text
+  }
+}
+
+function promoteToArray(baseType: ColumnType): ColumnType {
+  return ARRAY_TYPE_MAP.get(baseType) ?? ColumnTypeEnum.TextArray
+}
+
+function isArrayColumn(columnType: ColumnType): boolean {
+  return ARRAY_TYPE_MAP.has(columnType)
+}
+
+function normalizeNumberLike(value: unknown): number | string | unknown {
+  if (typeof value === 'bigint') {
+    const coerced = Number(value)
+    return Number.isSafeInteger(coerced) ? coerced : value.toString()
+  }
+  if (typeof value === 'string') {
+    const numeric = Number(value)
+    return Number.isFinite(numeric) ? numeric : value
+  }
+  return value
+}
+
 export class YqlTypeMapper {
-  /**
-   * Преобразует имя типа YDB в ColumnTypeEnum Prisma.
-   */
-  static toPrismaColumnType(ydbType: string): (typeof ColumnTypeEnum)[keyof typeof ColumnTypeEnum] {
-    switch (ydbType) {
-      case 'Utf8':
-      case 'String':
-      case 'Text':
-        return ColumnTypeEnum.Text
+  static toPrismaColumnType(type: Ydb.Type): ColumnType {
+    const withoutOptional = unwrapOptional(type)
 
-      case 'Int8':
-      case 'Int16':
-      case 'Int32':
-      case 'Uint8':
-      case 'Uint16':
-      case 'Uint32':
-        return ColumnTypeEnum.Int32
-
-      case 'Int64':
-      case 'Uint64':
-        return ColumnTypeEnum.Int64
-
-      case 'Bool':
-        return ColumnTypeEnum.Boolean
-
-      case 'Float':
-        return ColumnTypeEnum.Float
-
-      case 'Double':
-        return ColumnTypeEnum.Double
-
-      case 'Decimal':
-        return ColumnTypeEnum.Numeric
-
-      case 'Date':
-        return ColumnTypeEnum.Date
-
-      case 'Datetime':
-      case 'Timestamp':
-        return ColumnTypeEnum.DateTime
-
-      case 'Json':
-      case 'JsonDocument':
-        return ColumnTypeEnum.Json
-
-      case 'Bytes':
-      case 'DyNumber':
-        return ColumnTypeEnum.Bytes
-
+    switch (withoutOptional.type?.case) {
+      case 'typeId':
+        return mapPrimitive(withoutOptional.type.value)
+      case 'listType': {
+        const inner = withoutOptional.type.value.item as Ydb.Type
+        const innerColumn = this.toPrismaColumnType(inner)
+        return promoteToArray(innerColumn)
+      }
       default:
         return ColumnTypeEnum.Text
     }
   }
 
-  /**
-   * JS → YQL-параметры (для DECLARE $param AS Type)
-   */
-  static toYdbParameter(value: any): any {
-    if (value === null || value === undefined) return null
-
-    const t = typeof value
-    switch (t) {
-      case 'string':
-      case 'boolean':
-        return value
-      case 'number':
-        return Number.isSafeInteger(value) ? value : String(value)
-      case 'bigint':
-        return value.toString()
-      case 'object':
-        if (value instanceof Date) return value.toISOString()
-        if (Array.isArray(value)) return value.map(v => this.toYdbParameter(v))
-        if (value instanceof Uint8Array || Buffer.isBuffer(value)) return Array.from(value)
-        return JSON.stringify(value)
-      default:
-        return value
+  static normalizeValue(value: unknown, columnType: ColumnType): unknown {
+    if (value === null || value === undefined) {
+      return null
     }
-  }
 
-  /**
-   * YQL → JS (для возврата Prisma)
-   */
-  static fromYdbValue(value: any, ydbType?: string): any {
-    if (value === null || value === undefined) return null
+    if (isArrayColumn(columnType) && Array.isArray(value)) {
+      const baseType = [...ARRAY_TYPE_MAP.entries()].find(([, arrayType]) => arrayType === columnType)?.[0]
+      const effectiveBase = baseType ?? ColumnTypeEnum.Text
+      return value.map((item) => this.normalizeValue(item, effectiveBase))
+    }
 
-    switch (ydbType) {
-      case 'Int64':
-      case 'Uint64':
-        const num = Number(value)
-        return Number.isSafeInteger(num) ? num : String(value)
-      case 'Bool':
+    switch (columnType) {
+      case ColumnTypeEnum.Int32:
+      case ColumnTypeEnum.Float:
+      case ColumnTypeEnum.Double:
+      case ColumnTypeEnum.Numeric:
+        return normalizeNumberLike(value)
+      case ColumnTypeEnum.Int64: {
+        if (typeof value === 'bigint') {
+          const coerced = Number(value)
+          return Number.isSafeInteger(coerced) ? coerced : value.toString()
+        }
+        return value
+      }
+      case ColumnTypeEnum.Boolean:
         return Boolean(value)
-      case 'Json':
-      case 'JsonDocument':
-        return typeof value === 'string' ? value : JSON.stringify(value)
-      case 'Timestamp':
-      case 'Datetime':
-      case 'Date':
-        return typeof value === 'string' ? value : new Date(value).toISOString()
-      case 'Bytes':
-      case 'String':
-        if (typeof value === 'string') return value
-        if (Array.isArray(value)) return new Uint8Array(value)
+      case ColumnTypeEnum.Bytes:
+        if (value instanceof Uint8Array) {
+          return Buffer.from(value)
+        }
+        if (Array.isArray(value) && value.every((v) => typeof v === 'number')) {
+          return Buffer.from(value)
+        }
         return value
+      case ColumnTypeEnum.Json:
+        if (typeof value === 'string') return value
+        try {
+          return JSON.stringify(value)
+        } catch {
+          return String(value)
+        }
+      case ColumnTypeEnum.Date:
+        if (value instanceof Date) {
+          return value.toISOString().split('T')[0] ?? value.toISOString()
+        }
+        return value
+      case ColumnTypeEnum.DateTime:
+        if (value instanceof Date) {
+          return value.toISOString()
+        }
+        return value
+      case ColumnTypeEnum.Time:
+        return value
+      case ColumnTypeEnum.Uuid:
+        return typeof value === 'string' ? value : String(value)
       default:
         return value
     }
