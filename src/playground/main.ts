@@ -1,5 +1,5 @@
 import { PrismaClient } from '@prisma/client'
-import { PrismaYdbAdapterFactory } from '../src/adapter-factory'
+import { PrismaYdbAdapterFactory } from '../adapter-factory'
 
 async function main() {
   // 1️⃣ Создаём фабрику адаптера с параметрами подключения к YDB
