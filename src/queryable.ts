@@ -10,7 +10,7 @@ import { YdbErrorMapper } from './error-mapper'
  * в формат, ожидаемый Prisma (SqlResultSet).
  */
 export class YdbQueryable {
-  readonly provider = 'ydb'
+  readonly provider = 'postgres'
   readonly adapterName = '@prisma/adapter-ydb'
 
   constructor(protected client: YdbClientWrapper, protected txId?: string) {}

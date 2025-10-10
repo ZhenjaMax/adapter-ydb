@@ -13,7 +13,10 @@ import type { YdbConnectionConfig } from './types'
  * Это позволяет использовать адаптер в командах prisma migrate, studio и runtime.
  */
 export class PrismaYdbAdapterFactory implements SqlDriverAdapterFactory {
-  readonly provider = 'ydb'
+
+  // Prisma требует 'postgres' для SQL-совместимых адаптеров
+  // Затем можно переписать YDB, если поддержать через driver-adapter-utils
+  readonly provider = 'postgres'
   readonly adapterName = '@prisma/adapter-ydb'
 
   private config: YdbConnectionConfig

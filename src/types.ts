@@ -1,10 +1,5 @@
-import type {
-  ColumnTypeEnum,
-  SqlColumn,
-  SqlQueryResult,
-  SqlTransaction,
-  SqlTransactionOptions
-} from '@prisma/driver-adapter-utils'
+// Note: We intentionally avoid importing prisma adapter types here
+// to keep local YDB types independent from the adapter-utils package.
 
 export interface YdbQueryOptions {
   query: string
@@ -19,7 +14,7 @@ export interface YdbConnectionConfig {
 }
 
 export type YdbResultSet = {
-  columns: SqlColumn[]
+  columns: YdbColumn[]
   rows: any[][]
   rowsAffected?: number
 }

@@ -1,11 +1,11 @@
-import type { TransactionOptions } from '@prisma/driver-adapter-utils'
+import type { Transaction as PrismaTransaction, TransactionOptions } from '@prisma/driver-adapter-utils'
 import { YdbClientWrapper } from './client-wrapper'
 import { YdbQueryable } from './queryable'
 
-export class YdbTransaction extends YdbQueryable {
+export class YdbTransaction extends YdbQueryable implements PrismaTransaction {
   readonly options: TransactionOptions
 
-  constructor(private txId: string, client: YdbClientWrapper, options?: Partial<TransactionOptions>) {
+  constructor(protected txId: string, client: YdbClientWrapper, options?: Partial<TransactionOptions>) {
     super(client, txId)
     this.options = { usePhantomQuery: false, ...options }
   }

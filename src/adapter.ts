@@ -1,4 +1,4 @@
-import type { ConnectionInfo, IsolationLevel, SqlDriverAdapter } from '@prisma/driver-adapter-utils'
+import type { ConnectionInfo, IsolationLevel, SqlDriverAdapter, Transaction } from '@prisma/driver-adapter-utils'
 import { YdbClientWrapper } from './client-wrapper'
 import { YdbQueryable } from './queryable'
 import { YdbTransaction } from './transaction'
@@ -17,7 +17,7 @@ export class PrismaYdbAdapter extends YdbQueryable implements SqlDriverAdapter {
    * Запускает новую транзакцию в YDB.
    * Возвращает объект YdbTransaction, совместимый с Prisma Transaction API.
    */
-  async startTransaction(_isolationLevel?: IsolationLevel): Promise<YdbTransaction> {
+  async startTransaction(_isolationLevel?: IsolationLevel): Promise<Transaction> {
     const txId = await this.ydbClient.beginTransaction()
     return new YdbTransaction(txId, this.ydbClient)
   }
@@ -29,12 +29,14 @@ export class PrismaYdbAdapter extends YdbQueryable implements SqlDriverAdapter {
     const databasePath = this.ydbClient.getDatabasePath().trim()
     const normalizedPath = databasePath.replace(/\/+/g, '/').replace(/\/+$/, '')
     const pathSegments = normalizedPath.split('/').filter(Boolean)
-    const schemaName = pathSegments.length > 0 ? pathSegments[pathSegments.length - 1] : 'root'
+    const schemaName = pathSegments[pathSegments.length - 1] ?? 'root';
 
-    return {
-      schemaName,
-      supportsRelationJoins: true // Prisma может использовать JOIN между таблицами
+    const info: ConnectionInfo = {
+      supportsRelationJoins: true,
     }
+    
+    info.schemaName = schemaName
+    return info
   }
 
   /**
