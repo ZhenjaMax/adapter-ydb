@@ -2,12 +2,16 @@ import type { Transaction as PrismaTransaction, TransactionOptions } from '@pris
 import { YdbClientWrapper } from './client-wrapper'
 import { YdbQueryable } from './queryable'
 
-export class YdbTransaction extends YdbQueryable implements PrismaTransaction {
+export class YdbTransaction extends YdbQueryable {
   readonly options: TransactionOptions
 
   constructor(protected txId: string, client: YdbClientWrapper, options?: Partial<TransactionOptions>) {
     super(client, txId)
     this.options = { usePhantomQuery: true, ...options }
+  }
+
+  get id(): string {
+    return this.txId
   }
 
   async commit(): Promise<void> {
@@ -17,4 +21,11 @@ export class YdbTransaction extends YdbQueryable implements PrismaTransaction {
   async rollback(): Promise<void> {
     await this.client.rollbackTransaction(this.txId)
   }
+}
+
+export class PostgresCompatibilityTransaction
+  extends YdbTransaction
+  implements PrismaTransaction
+{
+  readonly provider = 'postgres'
 }

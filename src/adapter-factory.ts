@@ -1,55 +1,47 @@
-import type { SqlDriverAdapter, SqlDriverAdapterFactory } from '@prisma/driver-adapter-utils'
-import { PrismaYdbAdapter } from './adapter'
+import type { Provider, SqlDriverAdapter, SqlDriverAdapterFactory } from '@prisma/driver-adapter-utils'
+import { PostgresCompatibilityAdapter, PrismaYdbAdapter } from './adapter'
 import { YdbClientWrapper } from './client-wrapper'
+import type { SessionPoolOptions } from './session-pool'
 import type { YdbConnectionConfig } from './types'
 
-/**
- * PrismaYdbAdapterFactory
- *
- * Фабрика создаёт экземпляры адаптера PrismaYdbAdapter,
- * инкапсулируя настройку соединения с YDB.
- *
- * Prisma ожидает, что фабрика реализует интерфейс SqlDriverAdapterFactory.
- * Это позволяет использовать адаптер в командах prisma migrate, studio и runtime.
- */
-export class PrismaYdbAdapterFactory implements SqlDriverAdapterFactory {
-
-  // Prisma требует 'postgres' для SQL-совместимых адаптеров
-  // Затем можно переписать YDB, если поддержать через driver-adapter-utils
-  readonly provider = 'postgres'
+export class YdbAdapterFactory<TAdapter extends PrismaYdbAdapter = PrismaYdbAdapter> {
+  readonly provider: string = 'ydb'
   readonly adapterName = '@prisma/adapter-ydb'
 
-  private config: YdbConnectionConfig
+  constructor(protected config: YdbConnectionConfig, protected readonly poolOptions: SessionPoolOptions = {}) {}
 
-  constructor(config: YdbConnectionConfig) {
-    this.config = config
+  async create(): Promise<TAdapter> {
+    const client = await this.createClient()
+    return this.createAdapter(client)
   }
 
-  /**
-   * Обязательный метод фабрики по контракту Prisma —
-   * устанавливает соединение и возвращает адаптер.
-   */
-  async connect(): Promise<SqlDriverAdapter> {
-    const client = new YdbClientWrapper(this.config)
+  protected async createClient(): Promise<YdbClientWrapper> {
+    const client = new YdbClientWrapper(this.config, this.poolOptions)
     await client.connect()
-    return new PrismaYdbAdapter(client)
+    return client
   }
 
-  /**
-   * Удобный алиас для локального кода/playground,
-   * чтобы не ломать существующие вызовы factory.create().
-   */
-  async create(): Promise<PrismaYdbAdapter> {
-    return (await this.connect()) as PrismaYdbAdapter
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  protected createAdapter(client: YdbClientWrapper): TAdapter {
+    return new PrismaYdbAdapter(client) as TAdapter
   }
+}
 
-  /**
-   * Создание "shadow database" (теневой базы для миграций).
-   * Можно оставить так же, как основное подключение, либо
-   * при необходимости настраивать отдельный каталог/in-memory.
-   */
-  async connectToShadowDb(): Promise<PrismaYdbAdapter> {
-    // TODO: при необходимости — отдельная in-memory YDB для миграций
+export class PrismaYdbAdapterFactory
+  extends YdbAdapterFactory<PostgresCompatibilityAdapter>
+  implements SqlDriverAdapterFactory
+{
+  readonly provider: Provider = 'postgres'
+
+  async connect(): Promise<SqlDriverAdapter> {
     return this.create()
+  }
+
+  async connectToShadowDb(): Promise<PostgresCompatibilityAdapter> {
+    return this.create()
+  }
+
+  protected override createAdapter(client: YdbClientWrapper): PostgresCompatibilityAdapter {
+    return new PostgresCompatibilityAdapter(client)
   }
 }
