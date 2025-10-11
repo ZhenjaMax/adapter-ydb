@@ -1,4 +1,4 @@
-# Official Prisma SQL Adapter Architecture
+# Prisma SQL Adapter Architecture
 
 ## Interfaces exposed by `@prisma/driver-adapter-utils`
 
