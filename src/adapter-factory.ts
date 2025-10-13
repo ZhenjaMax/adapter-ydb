@@ -1,8 +1,8 @@
 import type { Provider, SqlDriverAdapter, SqlDriverAdapterFactory } from '@prisma/driver-adapter-utils'
-import { PostgresCompatibilityAdapter, PrismaYdbAdapter } from './adapter'
-import { YdbClientWrapper } from './client-wrapper'
-import type { SessionPoolOptions } from './session-pool'
-import type { YdbConnectionConfig } from './types'
+import { PostgresCompatibilityAdapter, PrismaYdbAdapter } from './adapter.js'
+import { YdbClientWrapper } from './client-wrapper.js'
+import type { SessionPoolOptions } from './session-pool.js'
+import type { YdbConnectionConfig } from './types.js'
 
 export class YdbAdapterFactory<TAdapter extends PrismaYdbAdapter = PrismaYdbAdapter> {
   readonly provider: string = 'ydb'

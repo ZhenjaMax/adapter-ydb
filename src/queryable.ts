@@ -1,7 +1,7 @@
 import type { SqlQuery, SqlResultSet } from '@prisma/driver-adapter-utils'
-import type { YdbQueryResult } from './types'
-import { YdbClientWrapper } from './client-wrapper'
-import { YdbErrorMapper } from './error-mapper'
+import type { YdbQueryResult } from './types.js'
+import { YdbClientWrapper } from './client-wrapper.js'
+import { YdbErrorMapper } from './error-mapper.js'
 
 /**
  * YdbQueryable — базовый слой выполнения запросов YQL.

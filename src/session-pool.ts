@@ -1,5 +1,5 @@
-import { QueryServiceDefinition } from '@ydbjs/api/dist/query.js'
-import { StatusIds_StatusCode } from '@ydbjs/api/dist/operation.js'
+import { QueryServiceDefinition } from '@ydbjs/api/query'
+import { StatusIds_StatusCode } from '@ydbjs/api/operation'
 import { YDBError } from '@ydbjs/error'
 import type { Driver } from '@ydbjs/core'
 

@@ -1,14 +1,13 @@
 import type { SqlQuery } from '@prisma/driver-adapter-utils'
 import { Driver } from '@ydbjs/core'
-import { QueryServiceDefinition, ExecMode, Syntax, StatsMode } from '@ydbjs/api/dist/query.js'
-import { StatusIds_StatusCode } from '@ydbjs/api/dist/operation.js'
-import type { TransactionControl } from '@ydbjs/api/dist/gen/protos/ydb_query_pb.js'
+import { QueryServiceDefinition, ExecMode, Syntax, StatsMode } from '@ydbjs/api/query'
+import { StatusIds_StatusCode } from '@ydbjs/api/operation'
 import { YDBError } from '@ydbjs/error'
-import { YqlQueryPreparer } from './yql-query-preparer'
-import { YdbResultNormalizer } from './ydb-result-normalizer'
-import { YdbSessionPool, type SessionPoolOptions, type SessionContext } from './session-pool'
-import { YdbTransactionManager } from './transaction-manager'
-import type { YdbConnectionConfig, YdbQueryResult, YdbTransactionIsolation, YdbTransactionMeta } from './types'
+import { YqlQueryPreparer } from './yql-query-preparer.js'
+import { YdbResultNormalizer } from './ydb-result-normalizer.js'
+import { YdbSessionPool, type SessionPoolOptions, type SessionContext } from './session-pool.js'
+import { YdbTransactionManager } from './transaction-manager.js'
+import type { YdbConnectionConfig, YdbQueryResult, YdbTransactionIsolation, YdbTransactionMeta } from './types.js'
 
 export class YdbClientWrapper {
   private driver: Driver | null = null
@@ -69,13 +68,12 @@ export class YdbClientWrapper {
     }
 
     if (txId) {
-      const txControl = {
+      request.txControl = {
         txSelector: {
           case: 'txId',
           value: txId,
         },
-      } as unknown as TransactionControl
-      request.txControl = txControl
+      }
     }
 
     const stream = client.executeQuery(request)

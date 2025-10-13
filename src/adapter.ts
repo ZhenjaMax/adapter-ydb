@@ -6,10 +6,10 @@ import type {
   Transaction,
 } from '@prisma/driver-adapter-utils'
 import { DriverAdapterError } from '@prisma/driver-adapter-utils'
-import { YdbClientWrapper } from './client-wrapper'
-import { YdbQueryable } from './queryable'
-import { PostgresCompatibilityTransaction, YdbTransaction } from './transaction'
-import type { YdbTransactionIsolation, YdbTransactionMeta } from './types'
+import { YdbClientWrapper } from './client-wrapper.js'
+import { YdbQueryable } from './queryable.js'
+import { PostgresCompatibilityTransaction, YdbTransaction } from './transaction.js'
+import type { YdbTransactionIsolation, YdbTransactionMeta } from './types.js'
 
 export class PrismaYdbAdapter extends YdbQueryable {
   constructor(protected ydbClient: YdbClientWrapper) {

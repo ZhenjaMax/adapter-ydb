@@ -1,5 +1,5 @@
-import type * as Ydb from '@ydbjs/api/dist/value.js'
-import { Type_PrimitiveTypeId } from '@ydbjs/api/dist/value.js'
+import type * as Ydb from '@ydbjs/api/value'
+import { Type_PrimitiveTypeId } from '@ydbjs/api/value'
 import { ColumnTypeEnum, type ColumnType } from '@prisma/driver-adapter-utils'
 
 type PrimitiveTypeId = Type_PrimitiveTypeId

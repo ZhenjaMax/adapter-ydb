@@ -1,5 +1,6 @@
 diff.sh
-src/playground/ydb_*
+/src/playground/ydb_*
+/generated/prisma
 
 # Logs
 logs
@@ -140,5 +141,3 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
-
-/generated/prisma

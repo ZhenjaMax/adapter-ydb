@@ -1,10 +1,10 @@
-import { QueryServiceDefinition } from '@ydbjs/api/dist/query.js'
-import { StatusIds_StatusCode } from '@ydbjs/api/dist/operation.js'
+import { QueryServiceDefinition } from '@ydbjs/api/query'
+import { StatusIds_StatusCode } from '@ydbjs/api/operation'
 import type { Driver } from '@ydbjs/core'
 import { YDBError } from '@ydbjs/error'
-import type { SessionContext } from './session-pool'
-import { YdbSessionPool } from './session-pool'
-import type { YdbTransactionIsolation, YdbTransactionMeta } from './types'
+import type { SessionContext } from './session-pool.js'
+import { YdbSessionPool } from './session-pool.js'
+import type { YdbTransactionIsolation, YdbTransactionMeta } from './types.js'
 
 export type TransactionContext = YdbTransactionMeta & {
   session: SessionContext

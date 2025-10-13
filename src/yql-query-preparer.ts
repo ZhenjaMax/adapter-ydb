@@ -1,9 +1,8 @@
 import type { ArgType, SqlQuery } from '@prisma/driver-adapter-utils'
-import type { TypedValue } from '@ydbjs/api/dist/gen/protos/ydb_value_pb.js'
-import type { Type as YdbValueType } from '@ydbjs/value/dist/type.js'
-import type { Value as YdbValue } from '@ydbjs/value/dist/value.js'
-import { Optional } from '@ydbjs/value/dist/optional.js'
-import { List, ListType } from '@ydbjs/value/dist/list.js'
+import type { TypedValue, Value as YdbProtoValue } from '@ydbjs/api/value'
+import type { Type as YdbValueType, Value as YdbValue } from '@ydbjs/value'
+import { Optional } from '@ydbjs/value/optional'
+import { List, ListType } from '@ydbjs/value/list'
 import {
   Bool,
   BoolType,
@@ -25,7 +24,7 @@ import {
   Utf8Type,
   Uuid,
   UuidType,
-} from '@ydbjs/value/dist/primitive.js'
+} from '@ydbjs/value/primitive'
 
 export type PreparedQuery = {
   text: string
@@ -44,8 +43,8 @@ class StaticListValue implements YdbValue {
     this.type = new ListType(itemType)
   }
 
-  encode() {
-    return { items: [] } as unknown as TypedValue['value']
+  encode(): YdbProtoValue {
+    return { items: [] } as unknown as YdbProtoValue
   }
 }
 

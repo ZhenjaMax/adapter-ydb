@@ -1,8 +1,8 @@
-import { StatusIds_StatusCode } from '@ydbjs/api/dist/operation.js'
-import { fromYdb, toJs } from '@ydbjs/value/dist/index.js'
+import { StatusIds_StatusCode } from '@ydbjs/api/operation'
+import { fromYdb, toJs } from '@ydbjs/value'
 import type { ColumnType } from '@prisma/driver-adapter-utils'
-import { YqlTypeMapper } from './yql-conversion'
-import type { YdbColumn, YdbQueryResult } from './types'
+import { YqlTypeMapper } from './yql-conversion.js'
+import type { YdbColumn, YdbQueryResult } from './types.js'
 import { YDBError } from '@ydbjs/error'
 
 export class YdbResultNormalizer {

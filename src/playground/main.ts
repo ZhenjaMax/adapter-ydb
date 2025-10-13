@@ -1,7 +1,7 @@
 import { PrismaClient } from '@prisma/client'
 import type { Prisma as PrismaNamespace } from '@prisma/client'
 import { join, sqltag } from '@prisma/client/runtime/library'
-import { PrismaYdbAdapterFactory } from '../adapter-factory'
+import { PrismaYdbAdapterFactory } from '../adapter-factory.js'
 
 const sql = sqltag
 

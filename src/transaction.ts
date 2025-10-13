@@ -1,6 +1,6 @@
 import type { Transaction as PrismaTransaction, TransactionOptions } from '@prisma/driver-adapter-utils'
-import { YdbClientWrapper } from './client-wrapper'
-import { YdbQueryable } from './queryable'
+import { YdbClientWrapper } from './client-wrapper.js'
+import { YdbQueryable } from './queryable.js'
 
 export class YdbTransaction extends YdbQueryable {
   readonly options: TransactionOptions

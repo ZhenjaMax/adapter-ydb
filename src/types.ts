@@ -1,5 +1,5 @@
 import type { ColumnType } from '@prisma/driver-adapter-utils'
-import type * as Ydb from '@ydbjs/api/dist/value.js'
+import type * as Ydb from '@ydbjs/api/value'
 
 export interface YdbQueryOptions {
   query: string
