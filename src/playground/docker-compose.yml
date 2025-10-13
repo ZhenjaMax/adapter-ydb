@@ -1,5 +1,3 @@
-version: '3.9'
-
 services:
   ydb:
     image: ydbplatform/local-ydb:latest

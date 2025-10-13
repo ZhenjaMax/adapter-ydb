@@ -13,8 +13,6 @@ type CountRow = { total: bigint | number }
 
 const endpoint = process.env.YDB_ENDPOINT ?? 'grpc://localhost:2136'
 const database = process.env.YDB_DATABASE ?? '/local'
-const databaseUrl =
-  process.env.DATABASE_URL ?? 'postgresql://adapter-ydb:password@localhost:5432/placeholder'
 
 async function ensureSchema(prisma: PrismaClient) {
   await prisma.$executeRawUnsafe(`
@@ -83,16 +81,10 @@ async function cleanup(prisma: PrismaClient) {
 
 async function main() {
   const factory = new PrismaYdbAdapterFactory({ endpoint, database })
-  const adapter = await factory.create()
 
   const prisma = new PrismaClient({
-    adapter,
+    adapter: factory,
     log: ['query', 'info', 'warn', 'error'],
-    datasources: {
-      db: {
-        url: databaseUrl,
-      },
-    },
   })
 
   try {
@@ -112,7 +104,6 @@ async function main() {
     console.error('❌ Error during YDB interaction:', error)
   } finally {
     await prisma.$disconnect()
-    await adapter.dispose()
     console.log('🔌 Disconnected.')
   }
 }
