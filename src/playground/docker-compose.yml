@@ -1,17 +1,17 @@
-version: "3.9"
+version: '3.9'
 
 services:
-  ydb-local:
+  ydb:
     image: ydbplatform/local-ydb:latest
-    container_name: ydb-local
-    hostname: localhost
+    container_name: ydb-playground
+    hostname: ydb
     platform: linux/amd64
     restart: unless-stopped
     ports:
-      - "2135:2135"   # GRPC TLS
-      - "2136:2136"   # GRPC (API)
-      - "8765:8765"   # Monitoring
-      - "9092:9092"   # Kafka Proxy
+      - '2135:2135'   # GRPC TLS
+      - '2136:2136'   # GRPC (API)
+      - '8765:8765'   # Monitoring UI
+      - '9092:9092'   # Kafka Proxy
     environment:
       GRPC_TLS_PORT: 2135
       GRPC_PORT: 2136
@@ -21,27 +21,24 @@ services:
       - ./ydb_certs:/ydb_certs
       - ./ydb_data:/ydb_data
 
-  prisma-local:
-    image: node:20-alpine
-    container_name: prisma-local
-    hostname: prisma-local
-    restart: unless-stopped
+  playground-runner:
+    image: node:20
+    container_name: ydb-playground-runner
+    hostname: playground
     depends_on:
-      - ydb-local
-    working_dir: /app
+      - ydb
+    working_dir: /workspace
     volumes:
-      - ./prisma:/app
-    ports:
-      - "5555:5555"   # Prisma Studio
-      - "2136:2136"   # Проброс gRPC API YDB (для адаптера)
-      - "2135:2135"   # Если потребуется TLS
+      - ../..:/workspace
     environment:
-      # Адрес подключения к YDB
-      YDB_ENDPOINT: grpc://ydb-local:2136
+      YDB_ENDPOINT: grpc://ydb:2136
       YDB_DATABASE: /local
-      # Опционально для Prisma
+      DATABASE_URL: postgresql://adapter-ydb:password@localhost:5432/placeholder
       NODE_ENV: development
     command: >
-      sh -c "npm install &&
-             npx prisma generate &&
-             npx prisma studio --port 5555"
+      bash -c "
+        npm install &&
+        npx prisma generate &&
+        npx --yes --package typescript tsc &&
+        node dist/playground/main.js
+      "

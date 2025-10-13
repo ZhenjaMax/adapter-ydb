@@ -1,55 +1,115 @@
 import { PrismaClient } from '@prisma/client'
+import type { Prisma as PrismaNamespace } from '@prisma/client'
+import { join, sqltag } from '@prisma/client/runtime/library'
 import { PrismaYdbAdapterFactory } from '../adapter-factory'
 
-async function main() {
-  // 1️⃣ Создаём фабрику адаптера с параметрами подключения к YDB
-  const factory = new PrismaYdbAdapterFactory({
-    endpoint: 'grpc://localhost:2136', // порт YDB из Docker
-    database: '/local',                 // путь к базе (обычно /local)
-  })
+const sql = sqltag
 
-  // 2️⃣ Инициализируем адаптер
+type TransactionClient = PrismaNamespace.TransactionClient
+
+type UserRow = { id: bigint | number; name: string; age: number; created_at: Date }
+
+type CountRow = { total: bigint | number }
+
+const endpoint = process.env.YDB_ENDPOINT ?? 'grpc://localhost:2136'
+const database = process.env.YDB_DATABASE ?? '/local'
+const databaseUrl =
+  process.env.DATABASE_URL ?? 'postgresql://adapter-ydb:password@localhost:5432/placeholder'
+
+async function ensureSchema(prisma: PrismaClient) {
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS users (
+      id Uint64,
+      name Utf8,
+      age Int32,
+      created_at Datetime,
+      PRIMARY KEY (id)
+    );
+  `)
+}
+
+async function seed(prisma: PrismaClient) {
+  const upsertQuery = sql`
+    UPSERT INTO users (id, name, age, created_at)
+    VALUES
+      (${1n}, ${'Alice'}, ${30}, CurrentUtcDatetime()),
+      (${2n}, ${'Bob'}, ${25}, CurrentUtcDatetime());
+  `
+
+  await prisma.$executeRaw(upsertQuery)
+}
+
+async function readUsers(prisma: PrismaClient) {
+  const rows = (await prisma.$queryRaw(sql`
+    SELECT id, name, age, created_at
+    FROM users
+    ORDER BY id;
+  `)) as UserRow[]
+
+  return rows.map((row: UserRow) => ({
+    ...row,
+    id: typeof row.id === 'bigint' ? Number(row.id) : row.id,
+    created_at: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
+  }))
+}
+
+async function transactionalSample(prisma: PrismaClient) {
+  await prisma.$transaction(async (tx: TransactionClient) => {
+    const insert = sql`
+      UPSERT INTO users (id, name, age, created_at)
+      VALUES (${3n}, ${'Charlie'}, ${28}, CurrentUtcDatetime());
+    `
+
+    await tx.$executeRaw(insert)
+
+    const selectCount = sql`
+      SELECT COUNT(*) AS total
+      FROM users;
+    `
+
+    const [result] = (await tx.$queryRaw(selectCount)) as CountRow[]
+    const count = result ? (typeof result.total === 'bigint' ? Number(result.total) : result.total) : 0
+    console.log('📊 Users count inside transaction:', count)
+  })
+}
+
+async function cleanup(prisma: PrismaClient) {
+  const idsList = join([1n, 2n, 3n])
+  await prisma.$executeRaw(sql`
+    DELETE FROM users
+    WHERE id IN (${idsList});
+  `)
+}
+
+async function main() {
+  const factory = new PrismaYdbAdapterFactory({ endpoint, database })
   const adapter = await factory.create()
 
-  // 3️⃣ Создаём PrismaClient с этим адаптером
   const prisma = new PrismaClient({
     adapter,
     log: ['query', 'info', 'warn', 'error'],
+    datasources: {
+      db: {
+        url: databaseUrl,
+      },
+    },
   })
 
   try {
-    console.log('✅ Connected to YDB through Prisma adapter.')
-
-    // 4️⃣ Пример выполнения raw-запроса (через YQL)
-    const createTable = `
-      CREATE TABLE IF NOT EXISTS users (
-        id Uint64,
-        name Utf8,
-        age Int32,
-        PRIMARY KEY (id)
-      );
-    `
-    await prisma.$executeRawUnsafe(createTable)
+    console.log('🚀 Connecting to YDB...')
+    await ensureSchema(prisma)
     console.log('🛠 Table "users" ensured.')
 
-    // 5️⃣ Вставка данных
-    await prisma.$executeRawUnsafe(`
-      UPSERT INTO users (id, name, age) VALUES (1, "Alice", 30);
-    `)
+    await cleanup(prisma)
+    await seed(prisma)
+    console.log('🌱 Seed data inserted.')
 
-    // 6️⃣ Чтение данных
-    const users = await prisma.$queryRawUnsafe(`SELECT * FROM users;`)
+    const users = await readUsers(prisma)
     console.log('👥 Users:', users)
 
-    // 7️⃣ Пример транзакции
-    await prisma.$transaction(async (tx: PrismaClient) => {
-      await tx.$executeRawUnsafe(`UPSERT INTO users (id, name, age) VALUES (2, "Bob", 25);`)
-      const count = await tx.$queryRawUnsafe(`SELECT COUNT(*) as cnt FROM users;`)
-      console.log('📊 Users count inside transaction:', count)
-    })
-
-  } catch (err) {
-    console.error('❌ Error during YDB interaction:', err)
+    await transactionalSample(prisma)
+  } catch (error) {
+    console.error('❌ Error during YDB interaction:', error)
   } finally {
     await prisma.$disconnect()
     await adapter.dispose()
@@ -57,7 +117,7 @@ async function main() {
   }
 }
 
-main().catch((e) => {
-  console.error(e)
+main().catch((error) => {
+  console.error('❌ Unhandled error:', error)
   process.exit(1)
 })
