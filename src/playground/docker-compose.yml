@@ -36,7 +36,7 @@ services:
     command: >
       bash -c "
         npm install &&
-        npx prisma generate &&
+        npx prisma generate --no-hints &&
         npx --yes --package typescript tsc &&
         node dist/playground/main.js
       "
