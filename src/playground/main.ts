@@ -1,82 +1,107 @@
 import { PrismaClient } from '@prisma/client'
-import type { Prisma as PrismaNamespace } from '@prisma/client'
-import { join, sqltag } from '@prisma/client/runtime/library'
+import { sqltag } from '@prisma/client/runtime/library'
 import { PrismaYdbAdapterFactory } from '../adapter-factory.js'
 
 const sql = sqltag
+const uint64 = (value: bigint | number) => sql`CAST(${value} AS Uint64)`
+const int32 = (value: number) => sql`CAST(${value} AS Int32)`
 
-type TransactionClient = PrismaNamespace.TransactionClient
-
-type UserRow = { id: bigint | number; name: string; age: number; created_at: Date }
-
-type CountRow = { total: bigint | number }
+type UserRow = { id: bigint | number; name: string; age: number; created_at: Date | string }
+type NormalizedUser = { id: number; name: string; age: number; created_at: string }
+type CreateUserInput = { id: bigint | number; name: string; age: number }
+type UpdateUserInput = { name: string; age: number }
 
 const endpoint = process.env.YDB_ENDPOINT ?? 'grpc://localhost:2136'
 const database = process.env.YDB_DATABASE ?? '/local'
 
+function toIsoString(value: Date | string): string {
+  if (value instanceof Date) return value.toISOString()
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toISOString()
+}
+
+function normalizeUser(row: UserRow): NormalizedUser {
+  return {
+    id: typeof row.id === 'bigint' ? Number(row.id) : row.id,
+    name: row.name,
+    age: row.age,
+    created_at: toIsoString(row.created_at),
+  }
+}
+
 async function ensureSchema(prisma: PrismaClient) {
-  await prisma.$executeRawUnsafe(`
-    CREATE TABLE IF NOT EXISTS users (
-      id Uint64,
-      name Utf8,
-      age Int32,
-      created_at Datetime,
-      PRIMARY KEY (id)
-    );
+  await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS users (
+    id Uint64,
+    name Utf8,
+    age Int32,
+    created_at Datetime,
+    PRIMARY KEY (id)
+  );`)
+}
+
+async function clearUsers(prisma: PrismaClient) {
+  await prisma.$executeRaw(sql`
+    DELETE FROM users;
   `)
 }
 
-async function seed(prisma: PrismaClient) {
-  const upsertQuery = sql`
+async function createUser(prisma: PrismaClient, user: CreateUserInput): Promise<NormalizedUser> {
+  await prisma.$executeRaw(sql`
     UPSERT INTO users (id, name, age, created_at)
-    VALUES
-      (${1n}, ${'Alice'}, ${30}, CurrentUtcDatetime()),
-      (${2n}, ${'Bob'}, ${25}, CurrentUtcDatetime());
-  `
+    VALUES (${uint64(user.id)}, ${user.name}, ${int32(user.age)}, CurrentUtcDatetime());
+  `)
 
-  await prisma.$executeRaw(upsertQuery)
+  const created = await readUser(prisma, user.id)
+  if (!created) {
+    throw new Error(`User with id ${user.id} was not created`)
+  }
+
+  return created
 }
 
-async function readUsers(prisma: PrismaClient) {
+async function readUser(prisma: PrismaClient, id: bigint | number): Promise<NormalizedUser | null> {
+  const rows = (await prisma.$queryRaw(sql`
+    SELECT id, name, age, created_at
+    FROM users
+    WHERE id = ${uint64(id)};
+  `)) as UserRow[]
+
+  const [row] = rows
+  return row ? normalizeUser(row) : null
+}
+
+async function listUsers(prisma: PrismaClient): Promise<NormalizedUser[]> {
   const rows = (await prisma.$queryRaw(sql`
     SELECT id, name, age, created_at
     FROM users
     ORDER BY id;
   `)) as UserRow[]
 
-  return rows.map((row: UserRow) => ({
-    ...row,
-    id: typeof row.id === 'bigint' ? Number(row.id) : row.id,
-    created_at: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
-  }))
+  return rows.map(normalizeUser)
 }
 
-async function transactionalSample(prisma: PrismaClient) {
-  await prisma.$transaction(async (tx: TransactionClient) => {
-    const insert = sql`
-      UPSERT INTO users (id, name, age, created_at)
-      VALUES (${3n}, ${'Charlie'}, ${28}, CurrentUtcDatetime());
-    `
+async function updateUser(
+  prisma: PrismaClient,
+  id: bigint | number,
+  data: UpdateUserInput,
+): Promise<NormalizedUser | null> {
+  await prisma.$executeRaw(sql`
+    UPDATE users
+    SET name = ${data.name}, age = ${int32(data.age)}
+    WHERE id = ${uint64(id)};
+  `)
 
-    await tx.$executeRaw(insert)
-
-    const selectCount = sql`
-      SELECT COUNT(*) AS total
-      FROM users;
-    `
-
-    const [result] = (await tx.$queryRaw(selectCount)) as CountRow[]
-    const count = result ? (typeof result.total === 'bigint' ? Number(result.total) : result.total) : 0
-    console.log('📊 Users count inside transaction:', count)
-  })
+  return readUser(prisma, id)
 }
 
-async function cleanup(prisma: PrismaClient) {
-  const idsList = join([1n, 2n, 3n])
+async function deleteUser(prisma: PrismaClient, id: bigint | number): Promise<boolean> {
   await prisma.$executeRaw(sql`
     DELETE FROM users
-    WHERE id IN (${idsList});
+    WHERE id = ${uint64(id)};
   `)
+
+  const existing = await readUser(prisma, id)
+  return existing === null
 }
 
 async function main() {
@@ -92,14 +117,29 @@ async function main() {
     await ensureSchema(prisma)
     console.log('🛠 Table "users" ensured.')
 
-    await cleanup(prisma)
-    await seed(prisma)
-    console.log('🌱 Seed data inserted.')
+    await clearUsers(prisma)
+    console.log('🧹 Clean start for CRUD demo.')
 
-    const users = await readUsers(prisma)
-    console.log('👥 Users:', users)
+    const alice = await createUser(prisma, { id: 1n, name: 'Alice', age: 30 })
+    console.log('➕ Created user:', alice)
 
-    await transactionalSample(prisma)
+    const bob = await createUser(prisma, { id: 2n, name: 'Bob', age: 25 })
+    console.log('➕ Created user:', bob)
+
+    const fetchedAlice = await readUser(prisma, 1n)
+    console.log('🔍 Read user #1:', fetchedAlice)
+
+    const updatedBob = await updateUser(prisma, 2n, { name: 'Robert', age: 26 })
+    console.log('✏️ Updated user #2:', updatedBob)
+
+    const usersAfterUpdate = await listUsers(prisma)
+    console.log('📋 Users after update:', usersAfterUpdate)
+
+    const deletedAlice = await deleteUser(prisma, 1n)
+    console.log('🗑 Deleted user #1:', deletedAlice ? 'success' : 'failed')
+
+    const remainingUsers = await listUsers(prisma)
+    console.log('📋 Remaining users:', remainingUsers)
   } catch (error) {
     console.error('❌ Error during YDB interaction:', error)
   } finally {
