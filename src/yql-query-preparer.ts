@@ -1,7 +1,7 @@
 import type { ArgType, SqlQuery } from '@prisma/driver-adapter-utils'
 import type { TypedValue, Value as YdbProtoValue } from '@ydbjs/api/value'
 import type { Type as YdbValueType, Value as YdbValue } from '@ydbjs/value'
-import { Optional } from '@ydbjs/value/optional'
+import { Optional, OptionalType } from '@ydbjs/value/optional'
 import { List, ListType } from '@ydbjs/value/list'
 import {
   Bool,
@@ -12,10 +12,22 @@ import {
   DoubleType,
   Float,
   FloatType,
+  Int8,
+  Int8Type,
+  Int16,
+  Int16Type,
   Int32,
   Int32Type,
   Int64,
   Int64Type,
+  Uint8,
+  Uint8Type,
+  Uint16,
+  Uint16Type,
+  Uint32,
+  Uint32Type,
+  Uint64,
+  Uint64Type,
   JsonDocument,
   JsonDocumentType,
   Timestamp,
@@ -34,6 +46,7 @@ export type PreparedQuery = {
 type ScalarMeta = {
   typeFactory(): YdbValueType
   create(value: unknown): YdbValue
+  optional: boolean
 }
 
 class StaticListValue implements YdbValue {
@@ -147,73 +160,82 @@ export class YqlQueryPreparer {
 
   private getScalarMeta(argType?: ArgType): ScalarMeta {
     const scalar = argType?.scalarType ?? 'string'
+    const { normalized: dbType, optional } = this.normalizeDbType(argType?.dbType)
 
     switch (scalar) {
       case 'boolean':
         return {
           typeFactory: () => new BoolType(),
           create: (value) => new Bool(Boolean(value)),
+          optional,
         }
       case 'int':
-        return {
-          typeFactory: () => new Int32Type(),
-          create: (value) => new Int32(this.ensureNumber(value)),
-        }
+        return this.getIntegerMeta(dbType, optional)
       case 'bigint':
-        return {
-          typeFactory: () => new Int64Type(),
-          create: (value) => new Int64(this.ensureBigInt(value)),
-        }
+        return this.getBigIntMeta(dbType, optional)
       case 'float':
         return {
           typeFactory: () => new FloatType(),
           create: (value) => new Float(this.ensureNumber(value)),
+          optional,
         }
       case 'decimal':
         return {
           typeFactory: () => new DoubleType(),
           create: (value) => new Double(this.ensureNumber(value)),
+          optional,
         }
       case 'uuid':
         return {
           typeFactory: () => new UuidType(),
           create: (value) => new Uuid(String(value)),
+          optional,
         }
       case 'json':
         return {
           typeFactory: () => new JsonDocumentType(),
           create: (value) => new JsonDocument(typeof value === 'string' ? value : JSON.stringify(value)),
+          optional,
         }
       case 'datetime':
         return {
           typeFactory: () => new TimestampType(),
           create: (value) => new Timestamp(this.ensureDate(value)),
+          optional,
         }
       case 'bytes':
         return {
           typeFactory: () => new BytesType(),
           create: (value) => new Bytes(this.ensureUint8Array(value)),
+          optional,
         }
       case 'enum':
       case 'string':
         return {
           typeFactory: () => new Utf8Type(),
           create: (value) => new Utf8(String(value)),
+          optional,
         }
       case 'unknown':
         return {
           typeFactory: () => new Utf8Type(),
           create: (value) => new Utf8(String(value)),
+          optional,
         }
       default:
         return {
           typeFactory: () => new Utf8Type(),
           create: (value) => new Utf8(String(value)),
+          optional,
         }
     }
   }
 
   private createScalarValue(value: unknown, meta: ScalarMeta): YdbValue {
+    if (this.isPreboundYdbValue(value)) {
+      return value as YdbValue
+    }
+
     if (value === null || value === undefined) {
       return new Optional(null, meta.typeFactory())
     }
@@ -222,6 +244,11 @@ export class YqlQueryPreparer {
     if (created instanceof Optional) {
       return created
     }
+
+    if (meta.optional) {
+      return new Optional(created, meta.typeFactory())
+    }
+
     return created
   }
 
@@ -229,11 +256,41 @@ export class YqlQueryPreparer {
     const source = Array.isArray(value) ? value : []
 
     if (source.length === 0) {
-      return new StaticListValue(meta.typeFactory())
+      const itemType = meta.optional ? new OptionalType(meta.typeFactory()) : meta.typeFactory()
+      return new StaticListValue(itemType)
     }
 
     const items = source.map((item) => this.createScalarValue(item, meta))
     return new List(...items)
+  }
+
+  private normalizeDbType(dbType?: string | null): { normalized?: string; optional: boolean } {
+    if (!dbType) {
+      return { optional: false }
+    }
+
+    let normalized = dbType.toLowerCase().replace(/\s+/g, '')
+    let optional = false
+
+    const optionalWrapper = /^optional<(.*)>$/
+    let match = optionalWrapper.exec(normalized)
+    while (match) {
+      optional = true
+      normalized = match[1]!
+      match = optionalWrapper.exec(normalized)
+    }
+
+    if (normalized.includes('optional<')) {
+      optional = true
+      normalized = normalized.replace(/optional<([^>]+)>/g, '$1')
+    }
+
+    if (normalized.endsWith('?')) {
+      optional = true
+      normalized = normalized.slice(0, -1)
+    }
+
+    return { normalized, optional }
   }
 
   private ensureDate(value: unknown): Date {
@@ -296,5 +353,106 @@ export class YqlQueryPreparer {
       return BigInt(value)
     }
     throw new Error('Cannot coerce value to bigint for YDB parameter binding.')
+  }
+
+  private isPreboundYdbValue(value: unknown): value is YdbValue {
+    if (!value || typeof value !== 'object') {
+      return false
+    }
+
+    const candidate = value as Partial<YdbValue>
+    return typeof candidate.encode === 'function' && typeof candidate.type?.encode === 'function'
+  }
+
+  private getIntegerMeta(dbType?: string | null, optional = false): ScalarMeta {
+    if (dbType) {
+      if (dbType.includes('uint8')) {
+        return {
+          typeFactory: () => new Uint8Type(),
+          create: (value) => new Uint8(this.ensureNumber(value)),
+          optional,
+        }
+      }
+      if (dbType.includes('uint16')) {
+        return {
+          typeFactory: () => new Uint16Type(),
+          create: (value) => new Uint16(this.ensureNumber(value)),
+          optional,
+        }
+      }
+      if (dbType.includes('uint32')) {
+        return {
+          typeFactory: () => new Uint32Type(),
+          create: (value) => new Uint32(this.ensureNumber(value)),
+          optional,
+        }
+      }
+      if (dbType.includes('uint64')) {
+        return {
+          typeFactory: () => new Uint64Type(),
+          create: (value) => new Uint64(this.ensureBigInt(value)),
+          optional,
+        }
+      }
+      if (dbType.includes('int8')) {
+        return {
+          typeFactory: () => new Int8Type(),
+          create: (value) => new Int8(this.ensureNumber(value)),
+          optional,
+        }
+      }
+      if (dbType.includes('int16')) {
+        return {
+          typeFactory: () => new Int16Type(),
+          create: (value) => new Int16(this.ensureNumber(value)),
+          optional,
+        }
+      }
+      if (dbType.includes('int32')) {
+        return {
+          typeFactory: () => new Int32Type(),
+          create: (value) => new Int32(this.ensureNumber(value)),
+          optional,
+        }
+      }
+      if (dbType.includes('int64')) {
+        return {
+          typeFactory: () => new Int64Type(),
+          create: (value) => new Int64(this.ensureBigInt(value)),
+          optional,
+        }
+      }
+    }
+
+    return {
+      typeFactory: () => new Int32Type(),
+      create: (value) => new Int32(this.ensureNumber(value)),
+      optional,
+    }
+  }
+
+  private getBigIntMeta(dbType?: string | null, optional = false): ScalarMeta {
+    if (dbType) {
+      if (dbType.includes('uint64')) {
+        return {
+          typeFactory: () => new Uint64Type(),
+          create: (value) => new Uint64(this.ensureBigInt(value)),
+          optional,
+        }
+      }
+      if (dbType.includes('int64')) {
+        return {
+          typeFactory: () => new Int64Type(),
+          create: (value) => new Int64(this.ensureBigInt(value)),
+          optional,
+        }
+      }
+    }
+
+    return {
+      typeFactory: () => new Int64Type(),
+      create: (value) => new Int64(this.ensureBigInt(value)),
+      optional,
+    }
   }
 }
