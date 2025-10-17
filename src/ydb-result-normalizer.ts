@@ -1,4 +1,5 @@
 import { StatusIds_StatusCode } from '@ydbjs/api/operation'
+import type { QueryStats, TableAccessStats } from '@ydbjs/api/query'
 import { fromYdb, toJs } from '@ydbjs/value'
 import type { ColumnType } from '@prisma/driver-adapter-utils'
 import { YqlTypeMapper } from './yql-conversion.js'
@@ -10,6 +11,8 @@ export class YdbResultNormalizer {
     const columns: YdbColumn[] = []
     const columnTypes: ColumnType[] = []
     const rows: unknown[][] = []
+    let rowsAffected: number | undefined
+    let stats: Record<string, unknown> | undefined
 
     for await (const part of stream) {
       if (part.status !== StatusIds_StatusCode.SUCCESS) {
@@ -17,6 +20,10 @@ export class YdbResultNormalizer {
       }
 
       if (!part.resultSet) {
+        if (part.execStats) {
+          rowsAffected = this.calculateRowsAffected(part.execStats)
+          stats = this.normalizeStats(part.execStats)
+        }
         continue
       }
 
@@ -57,13 +64,80 @@ export class YdbResultNormalizer {
 
         rows.push(normalizedRow)
       }
+
+      if (part.execStats) {
+        rowsAffected = this.calculateRowsAffected(part.execStats)
+        stats = this.normalizeStats(part.execStats)
+      }
     }
 
-    return {
+    const result: YdbQueryResult = {
       columns,
       columnTypes,
       rows,
-      rowsAffected: 0,
     }
+
+    if (rowsAffected !== undefined) {
+      result.rowsAffected = rowsAffected
+    }
+
+    if (stats) {
+      result.stats = stats
+    }
+
+    return result
+  }
+
+  private calculateRowsAffected(execStats: QueryStats): number | undefined {
+    let total = 0n
+
+    for (const phase of execStats.queryPhases ?? []) {
+      for (const table of phase.tableAccess ?? []) {
+        total += this.getOperationRows(table.updates)
+        total += this.getOperationRows(table.deletes)
+      }
+    }
+
+    if (total === 0n) {
+      return 0
+    }
+
+    if (total > BigInt(Number.MAX_SAFE_INTEGER)) {
+      return Number.MAX_SAFE_INTEGER
+    }
+
+    return Number(total)
+  }
+
+  private getOperationRows(operation?: TableAccessStats['updates']): bigint {
+    if (!operation?.rows) {
+      return 0n
+    }
+    return BigInt(operation.rows)
+  }
+
+  private normalizeStats(execStats: QueryStats): Record<string, unknown> {
+    return this.normalizeValue(execStats) as Record<string, unknown>
+  }
+
+  private normalizeValue(value: unknown): unknown {
+    if (typeof value === 'bigint') {
+      return value.toString()
+    }
+
+    if (Array.isArray(value)) {
+      return value.map((item) => this.normalizeValue(item))
+    }
+
+    if (value && typeof value === 'object') {
+      const normalized: Record<string, unknown> = {}
+      for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+        if (typeof nested === 'function') continue
+        normalized[key] = this.normalizeValue(nested)
+      }
+      return normalized
+    }
+
+    return value
   }
 }
