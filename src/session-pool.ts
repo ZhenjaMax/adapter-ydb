@@ -57,8 +57,6 @@ export class YdbSessionPool {
   private readonly options: Required<SessionPoolOptions>
   private readonly manager: YdbSessionManager
   private idleSessions: ManagedSession[] = []
-  private totalSessions = 0
-  private pendingAcquires: Array<(session: ManagedSession) => void> = []
 
   constructor(driver: Driver, options: SessionPoolOptions = {}) {
     this.options = {
@@ -69,7 +67,9 @@ export class YdbSessionPool {
   }
 
   async acquire(): Promise<{ session: SessionContext; release: ReleaseFn }> {
-    const session = await this.obtainSession()
+    await this.evictExpired()
+
+    const session = (await this.takeIdle()) ?? (await this.manager.create())
 
     return {
       session,
@@ -78,43 +78,13 @@ export class YdbSessionPool {
   }
 
   async destroy(session: SessionContext): Promise<void> {
-    this.totalSessions = Math.max(0, this.totalSessions - 1)
     await this.manager.delete(session)
-    await this.fulfillPending()
   }
 
   async drain(): Promise<void> {
     const idle = this.idleSessions
     this.idleSessions = []
-    this.totalSessions = Math.max(0, this.totalSessions - idle.length)
     await Promise.all(idle.map((session) => this.manager.delete(session)))
-  }
-
-  private async obtainSession(): Promise<ManagedSession> {
-    await this.evictExpired()
-
-    const idle = this.idleSessions.pop()
-    if (idle) {
-      idle.lastUsed = Date.now()
-      return idle
-    }
-
-    if (this.totalSessions < this.options.maxSize) {
-      const created = await this.manager.create()
-      this.totalSessions += 1
-      return created
-    }
-
-    return this.waitForSession()
-  }
-
-  private async waitForSession(): Promise<ManagedSession> {
-    return new Promise<ManagedSession>((resolve) => {
-      this.pendingAcquires.push((session) => {
-        session.lastUsed = Date.now()
-        resolve(session)
-      })
-    })
   }
 
   private async takeIdle(): Promise<ManagedSession | undefined> {
@@ -133,18 +103,10 @@ export class YdbSessionPool {
 
       if (error) {
         await this.manager.delete(session)
-        this.totalSessions = Math.max(0, this.totalSessions - 1)
-        await this.fulfillPending()
         return
       }
 
       session.lastUsed = Date.now()
-      const pending = this.pendingAcquires.shift()
-      if (pending) {
-        pending(session)
-        return
-      }
-
       this.idleSessions.push(session)
       await this.trimExcess()
     }
@@ -152,17 +114,11 @@ export class YdbSessionPool {
 
   private async trimExcess(): Promise<void> {
     const { maxSize } = this.options
-    if (this.totalSessions <= maxSize && this.idleSessions.length <= maxSize) {
+    if (this.idleSessions.length <= maxSize) {
       return
     }
 
-    const overflowCount = Math.max(0, this.idleSessions.length - maxSize)
-    if (overflowCount === 0) {
-      return
-    }
-
-    const overflow = this.idleSessions.splice(0, overflowCount)
-    this.totalSessions = Math.max(0, this.totalSessions - overflow.length)
+    const overflow = this.idleSessions.splice(0, this.idleSessions.length - maxSize)
     await Promise.all(overflow.map((session) => this.manager.delete(session)))
   }
 
@@ -186,39 +142,7 @@ export class YdbSessionPool {
     this.idleSessions = active
 
     if (expired.length > 0) {
-      this.totalSessions = Math.max(0, this.totalSessions - expired.length)
       await Promise.all(expired.map((session) => this.manager.delete(session)))
-      await this.fulfillPending()
-    }
-  }
-
-  private async fulfillPending(): Promise<void> {
-    while (this.pendingAcquires.length > 0) {
-      const session = await this.takeIdle()
-      if (session) {
-        const resolve = this.pendingAcquires.shift()
-        if (resolve) {
-          resolve(session)
-          continue
-        }
-        this.idleSessions.push(session)
-        break
-      }
-
-      if (this.totalSessions >= this.options.maxSize) {
-        break
-      }
-
-      const created = await this.manager.create()
-      this.totalSessions += 1
-      const resolve = this.pendingAcquires.shift()
-      if (resolve) {
-        created.lastUsed = Date.now()
-        resolve(created)
-      } else {
-        this.idleSessions.push(created)
-        break
-      }
     }
   }
 }

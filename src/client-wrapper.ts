@@ -1,6 +1,5 @@
 import type { SqlQuery } from '@prisma/driver-adapter-utils'
-import { AccessTokenCredentialsProvider } from '@ydbjs/auth/access-token'
-import { Driver, type DriverOptions } from '@ydbjs/core'
+import { Driver } from '@ydbjs/core'
 import { QueryServiceDefinition, ExecMode, Syntax, StatsMode } from '@ydbjs/api/query'
 import { StatusIds_StatusCode } from '@ydbjs/api/operation'
 import { YDBError } from '@ydbjs/error'
@@ -24,8 +23,7 @@ export class YdbClientWrapper {
     if (this.connected) return
 
     const connectionString = this.buildConnectionString()
-    const driverOptions = this.createDriverOptions()
-    const driver = new Driver(connectionString, driverOptions)
+    const driver = new Driver(connectionString)
     await driver.ready()
 
     this.driver = driver
@@ -66,12 +64,16 @@ export class YdbClientWrapper {
         },
       },
       parameters: encodedParams,
-      statsMode: StatsMode.BASIC,
+      statsMode: StatsMode.NONE,
     }
 
-    const txControl = this.createTxControl(txId)
-    if (txControl) {
-      request.txControl = txControl
+    if (txId) {
+      request.txControl = {
+        txSelector: {
+          case: 'txId',
+          value: txId,
+        },
+      }
     }
 
     const stream = client.executeQuery(request)
@@ -165,18 +167,6 @@ export class YdbClientWrapper {
     return `${endpoint}${normalizedDatabase}`
   }
 
-  private createDriverOptions(): DriverOptions | undefined {
-    const options: DriverOptions = {}
-
-    if (this.config.authToken) {
-      options.credentialsProvider = new AccessTokenCredentialsProvider({
-        token: this.config.authToken,
-      })
-    }
-
-    return Object.keys(options).length > 0 ? options : undefined
-  }
-
   private ensureDriver(): Driver {
     const driver = this.driver
     if (!driver || !this.connected) {
@@ -197,30 +187,5 @@ export class YdbClientWrapper {
       throw new Error('Transaction manager is not initialized. Call connect() first.')
     }
     return this.transactionManager
-  }
-
-  private createTxControl(txId?: string) {
-    if (txId) {
-      return {
-        txSelector: {
-          case: 'txId',
-          value: txId,
-        },
-        commitTx: false,
-      }
-    }
-
-    return {
-      txSelector: {
-        case: 'beginTx',
-        value: {
-          txMode: {
-            case: 'serializableReadWrite',
-            value: {},
-          },
-        },
-      },
-      commitTx: true,
-    }
   }
 }
