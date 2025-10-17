@@ -12,6 +12,7 @@
     "@prisma/adapter-mariadb": "^6.16.3",
     "@prisma/adapter-mssql": "^6.16.3",
     "@prisma/driver-adapter-utils": "^6.16.3",
+    "@ydbjs/auth": "^6.0.0",
     "@ydbjs/api": "^6.0.0",
     "@ydbjs/core": "^6.0.0",
     "@ydbjs/error": "^6.0.0",

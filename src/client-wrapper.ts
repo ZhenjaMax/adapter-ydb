@@ -1,5 +1,6 @@
 import type { SqlQuery } from '@prisma/driver-adapter-utils'
-import { Driver } from '@ydbjs/core'
+import { AccessTokenCredentialsProvider } from '@ydbjs/auth/access-token'
+import { Driver, type DriverOptions } from '@ydbjs/core'
 import { QueryServiceDefinition, ExecMode, Syntax, StatsMode } from '@ydbjs/api/query'
 import { StatusIds_StatusCode } from '@ydbjs/api/operation'
 import { YDBError } from '@ydbjs/error'
@@ -23,7 +24,8 @@ export class YdbClientWrapper {
     if (this.connected) return
 
     const connectionString = this.buildConnectionString()
-    const driver = new Driver(connectionString)
+    const driverOptions = this.createDriverOptions()
+    const driver = new Driver(connectionString, driverOptions)
     await driver.ready()
 
     this.driver = driver
@@ -64,16 +66,12 @@ export class YdbClientWrapper {
         },
       },
       parameters: encodedParams,
-      statsMode: StatsMode.NONE,
+      statsMode: StatsMode.BASIC,
     }
 
-    if (txId) {
-      request.txControl = {
-        txSelector: {
-          case: 'txId',
-          value: txId,
-        },
-      }
+    const txControl = this.createTxControl(txId, prepared.text)
+    if (txControl) {
+      request.txControl = txControl
     }
 
     const stream = client.executeQuery(request)
@@ -167,6 +165,18 @@ export class YdbClientWrapper {
     return `${endpoint}${normalizedDatabase}`
   }
 
+  private createDriverOptions(): DriverOptions | undefined {
+    const options: DriverOptions = {}
+
+    if (this.config.authToken) {
+      options.credentialsProvider = new AccessTokenCredentialsProvider({
+        token: this.config.authToken,
+      })
+    }
+
+    return Object.keys(options).length > 0 ? options : undefined
+  }
+
   private ensureDriver(): Driver {
     const driver = this.driver
     if (!driver || !this.connected) {
@@ -187,5 +197,56 @@ export class YdbClientWrapper {
       throw new Error('Transaction manager is not initialized. Call connect() first.')
     }
     return this.transactionManager
+  }
+
+  private createTxControl(txId: string | undefined, queryText: string) {
+    if (txId) {
+      return {
+        txSelector: {
+          case: 'txId',
+          value: txId,
+        },
+        commitTx: false,
+      }
+    }
+
+    if (this.isSchemaOperation(queryText)) {
+      return undefined
+    }
+
+    return {
+      txSelector: {
+        case: 'beginTx',
+        value: {
+          txMode: {
+            case: 'serializableReadWrite',
+            value: {},
+          },
+        },
+      },
+      commitTx: true,
+    }
+  }
+
+  private isSchemaOperation(queryText: string): boolean {
+    const normalized = queryText.trim().toUpperCase()
+    if (!normalized) return false
+
+    const firstToken = normalized.split(/\s+/, 1)[0]
+
+    switch (firstToken) {
+      case 'CREATE':
+      case 'DROP':
+      case 'ALTER':
+      case 'RENAME':
+      case 'TRUNCATE':
+      case 'GRANT':
+      case 'REVOKE':
+      case 'PRAGMA':
+      case 'USE':
+        return true
+      default:
+        return false
+    }
   }
 }
