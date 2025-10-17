@@ -69,7 +69,7 @@ export class YdbClientWrapper {
       statsMode: StatsMode.BASIC,
     }
 
-    const txControl = this.createTxControl(txId, prepared.text)
+    const txControl = this.createTxControl(txId)
     if (txControl) {
       request.txControl = txControl
     }
@@ -199,7 +199,7 @@ export class YdbClientWrapper {
     return this.transactionManager
   }
 
-  private createTxControl(txId: string | undefined, queryText: string) {
+  private createTxControl(txId?: string) {
     if (txId) {
       return {
         txSelector: {
@@ -208,10 +208,6 @@ export class YdbClientWrapper {
         },
         commitTx: false,
       }
-    }
-
-    if (this.isSchemaOperation(queryText)) {
-      return undefined
     }
 
     return {
@@ -225,28 +221,6 @@ export class YdbClientWrapper {
         },
       },
       commitTx: true,
-    }
-  }
-
-  private isSchemaOperation(queryText: string): boolean {
-    const normalized = queryText.trim().toUpperCase()
-    if (!normalized) return false
-
-    const firstToken = normalized.split(/\s+/, 1)[0]
-
-    switch (firstToken) {
-      case 'CREATE':
-      case 'DROP':
-      case 'ALTER':
-      case 'RENAME':
-      case 'TRUNCATE':
-      case 'GRANT':
-      case 'REVOKE':
-      case 'PRAGMA':
-      case 'USE':
-        return true
-      default:
-        return false
     }
   }
 }

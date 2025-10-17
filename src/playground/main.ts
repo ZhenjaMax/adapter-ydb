@@ -109,7 +109,12 @@ async function main() {
 
   const prisma = new PrismaClient({
     adapter: factory,
-    log: ['query', 'info', 'warn', 'error'],
+    log: [
+      // 'query', 
+      // 'info', 
+      // 'warn', 
+      'error'
+    ],
   })
 
   try {
@@ -118,7 +123,7 @@ async function main() {
     console.log('🛠 Table "users" ensured.')
 
     await clearUsers(prisma)
-    console.log('🧹 Clean start for CRUD demo.')
+    console.log('🧹 Clean finished for CRUD demo.')
 
     const alice = await createUser(prisma, { id: 1n, name: 'Alice', age: 30 })
     console.log('➕ Created user:', alice)
