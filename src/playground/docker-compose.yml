@@ -1,8 +1,8 @@
 services:
-  ydb:
+  ydb-playground:
     image: ydbplatform/local-ydb:latest
     container_name: ydb-playground
-    hostname: ydb
+    hostname: ydb-playground
     platform: linux/amd64
     restart: unless-stopped
     ports:
@@ -19,17 +19,17 @@ services:
       - ./ydb_certs:/ydb_certs
       - ./ydb_data:/ydb_data
 
-  playground-runner:
+  prisma-playground:
     image: node:20
-    container_name: ydb-playground-runner
-    hostname: playground
+    container_name: prisma-playground
+    hostname: prisma-playground
     depends_on:
-      - ydb
+      - ydb-playground
     working_dir: /workspace
     volumes:
       - ../..:/workspace
     environment:
-      YDB_ENDPOINT: grpc://ydb:2136
+      YDB_ENDPOINT: grpc://ydb-playground:2136
       YDB_DATABASE: /local
       DATABASE_URL: postgresql://adapter-ydb:password@localhost:5432/placeholder
       NODE_ENV: development
@@ -37,6 +37,6 @@ services:
       bash -c "
         npm install &&
         npx prisma generate --no-hints &&
-        npx --yes --package typescript tsc &&
+        npx --noEmit --yes --package typescript tsc &&
         node dist/playground/main.js
       "
