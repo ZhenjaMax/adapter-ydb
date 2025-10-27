@@ -118,42 +118,42 @@ async function main() {
   })
 
   try {
-    console.log('🚀 Connecting to YDB...')
+    console.log('Connecting to YDB...')
     await ensureSchema(prisma)
-    console.log('🛠 Table "users" ensured.')
+    console.log('[OK] Table "users" ensured.')
 
     await clearUsers(prisma)
-    console.log('🧹 Clean finished for CRUD demo.')
+    console.log('[OK] Clean finished for CRUD demo.')
 
     const alice = await createUser(prisma, { id: 1n, name: 'Alice', age: 30 })
-    console.log('➕ Created user:', alice)
+    console.log('[OK] Created user:', alice)
 
     const bob = await createUser(prisma, { id: 2n, name: 'Bob', age: 25 })
-    console.log('➕ Created user:', bob)
+    console.log('[OK] Created user:', bob)
 
     const fetchedAlice = await readUser(prisma, 1n)
-    console.log('🔍 Read user #1:', fetchedAlice)
+    console.log('[OK] Read user #1:', fetchedAlice)
 
     const updatedBob = await updateUser(prisma, 2n, { name: 'Robert', age: 26 })
-    console.log('✏️ Updated user #2:', updatedBob)
+    console.log('[OK] Updated user #2:', updatedBob)
 
     const usersAfterUpdate = await listUsers(prisma)
-    console.log('📋 Users after update:', usersAfterUpdate)
+    console.log('[OK] Users after update:', usersAfterUpdate)
 
     const deletedAlice = await deleteUser(prisma, 1n)
-    console.log('🗑 Deleted user #1:', deletedAlice ? 'success' : 'failed')
+    console.log('[OK] Deleted user #1:', deletedAlice ? 'success' : 'failed')
 
     const remainingUsers = await listUsers(prisma)
-    console.log('📋 Remaining users:', remainingUsers)
+    console.log('[OK] Remaining users:', remainingUsers)
   } catch (error) {
-    console.error('❌ Error during YDB interaction:', error)
+    console.error('[ERROR] Error during YDB interaction:', error)
   } finally {
     await prisma.$disconnect()
-    console.log('🔌 Disconnected.')
+    console.log('[OK] Disconnected.')
   }
 }
 
 main().catch((error) => {
-  console.error('❌ Unhandled error:', error)
+  console.error('[ERROR] Unhandled error:', error)
   process.exit(1)
 })
