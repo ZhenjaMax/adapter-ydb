@@ -1,6 +1,6 @@
 diff.sh
 /src/playground/ydb_*
-/generated/prisma
+/generated
 /docs
 /prisma
 /dist
