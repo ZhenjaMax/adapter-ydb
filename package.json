@@ -1,12 +1,12 @@
 {
   "name": "adapter-ydb",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Unofficial Prisma ORM connector for YDB",
   "author": "ZhenjaMax",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/ZhenjaMax/adapter-ydb.git"
+    "url": "git+https://github.com/ZhenjaMax/adapter-ydb.git"
   },
   "keywords": [
     "prisma",
