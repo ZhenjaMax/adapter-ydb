@@ -1,6 +1,6 @@
 {
   "name": "adapter-ydb",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Unofficial Prisma ORM connector for YDB",
   "author": "ZhenjaMax",
   "license": "MIT",
@@ -18,6 +18,11 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "scripts": {
+    "clean": "rimraf dist",
+    "build": "npm run clean && tsc",
+    "prepublishOnly": "npm run build"
+  },
   "exports": {
     ".": {
       "import": "./dist/index.js",
@@ -34,6 +39,7 @@
   },
   "devDependencies": {
     "@prisma/client": "^6.17.1",
-    "prisma": "^6.17.1"
+    "prisma": "^6.17.1",
+    "rimraf": "^6.1.0"
   }
 }

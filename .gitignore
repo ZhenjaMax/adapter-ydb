@@ -3,6 +3,7 @@ diff.sh
 /generated/prisma
 /docs
 /prisma
+/dist
 
 # Logs
 logs
