@@ -110,9 +110,6 @@ async function main() {
   const prisma = new PrismaClient({
     adapter: factory,
     log: [
-      // 'query', 
-      // 'info', 
-      // 'warn', 
       'error'
     ],
   })
