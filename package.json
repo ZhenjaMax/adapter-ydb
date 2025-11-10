@@ -1,6 +1,6 @@
 {
   "name": "adapter-ydb",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "Unofficial Prisma ORM connector for YDB",
   "author": "ZhenjaMax",
   "license": "MIT",
