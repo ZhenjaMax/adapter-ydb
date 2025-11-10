@@ -2,6 +2,7 @@ diff.sh
 /src/playground/ydb_*
 /generated/prisma
 /docs
+/prisma
 
 # Logs
 logs
