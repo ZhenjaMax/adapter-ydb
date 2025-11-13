@@ -11,6 +11,23 @@ npm install adapter-ydb@alpha
 ## Пример запуска
 Полный пример представлен в файле [`src/playground/main.ts`](src/playground/main.ts). Он демонстрирует CRUD-операции с таблицей `users` в YDB.
 
+### Создание Prisma Schema
+Пример схемы представлен в [`prisma/schema.prisma`](prisma/schema.prisma).
+```schema
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+```
+- `provider = "postgresql"` необходим для совместимости;
+- `url = env("DATABASE_URL")` необходим для запуска клиента;
+    - воспользуйтесь командой `npm prisma init`;
+    - добавьте в файл `.env` API KEY для Prisma; на текущем этапе разработки Prisma Client требует URL, он фактически не используется и нужен лишь для совместимости; можно указать dummy-URL на `prisma+postgres://accelerate.prisma-data.net`.
+
 ### Покдлючение к YDB и генерация клиента Prisma
 ```ts
 const endpoint = 'grpc://localhost:2136'

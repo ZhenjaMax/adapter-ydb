@@ -3,6 +3,7 @@ diff.sh
 /generated
 /docs
 /prisma
+prisma.config.ts
 
 # Logs
 logs
